@@ -43,36 +43,25 @@ app.post('/omi-webhook', async (req, res) => {
     
     console.log('📝 Full transcript:', fullTranscript);
     
-    // Check if transcript contains both "hey" and "omi" (case insensitive)
-    const transcriptLower = fullTranscript.toLowerCase();
-    const hasHey = transcriptLower.includes('hey');
-    const hasOmi = transcriptLower.includes('omi');
-    
-    console.log('🔍 Checking for trigger words:', { hasHey, hasOmi });
-    
-    if (!hasHey || !hasOmi) {
-      console.log('⏭️ SKIPPING - Missing required trigger words. Transcript:', fullTranscript);
-      console.log('📤 NO NOTIFICATION will be sent');
+    // Check if transcript contains "hey omi" (case insensitive)
+    if (!fullTranscript.toLowerCase().includes('hey omi')) {
+      console.log('⏭️ Skipping transcript - does not contain "hey omi":', fullTranscript);
       return res.status(200).json({ 
-        message: 'Transcript ignored - does not contain both "hey" and "omi"',
-        trigger_words_found: { hasHey, hasOmi }
+        message: 'Transcript ignored - does not contain "hey omi"' 
       });
     }
     
-    console.log('✅ TRIGGER WORDS FOUND - Both "hey" and "omi" detected');
-    console.log('📤 NOTIFICATION WILL BE SENT after processing');
-    
-    // Find the segment that contains "hey" and get everything after it
+    // Find the segment that contains "hey omi" and get everything after it
     let question = '';
     for (const segment of segments) {
       const segmentText = segment.text.toLowerCase();
-      if (segmentText.includes('hey')) {
-        const heyIndex = segmentText.indexOf('hey');
-        question = segment.text.substring(heyIndex + 3).trim(); // Remove "hey" and trim
+      if (segmentText.includes('hey omi')) {
+        const heyOmiIndex = segmentText.indexOf('hey omi');
+        question = segment.text.substring(heyOmiIndex + 8).trim();
         
-        // If this segment doesn't have enough content after "hey", 
+        // If this segment doesn't have enough content after "hey omi", 
         // look for content in subsequent segments
-        if (!question || question.length < 5) { // Less than 5 chars probably isn't a real question
+        if (!question) {
           const currentIndex = segments.indexOf(segment);
           const remainingSegments = segments.slice(currentIndex + 1);
           question = remainingSegments
@@ -82,11 +71,6 @@ app.post('/omi-webhook', async (req, res) => {
         }
         break;
       }
-    }
-    
-    // Clean up the question - remove "omi" and any punctuation around it
-    if (question) {
-      question = question.replace(/^[,.\s]*omi[,.\s]*/i, '').trim();
     }
     
     if (!question) {
@@ -118,30 +102,20 @@ app.post('/omi-webhook', async (req, res) => {
     const aiResponse = openaiResponse.choices[0].message.content;
     console.log('✨ OpenAI response:', aiResponse);
     
-    // ONLY REACH THIS POINT IF: both trigger words found AND valid question extracted
-    // Now we can safely send the notification
-    console.log('📤 Sending notification to Omi...');
-    console.log('🔑 Debug - App ID:', process.env.OMI_APP_ID);
-    console.log('🔑 Debug - App Secret length:', process.env.OMI_APP_SECRET ? process.env.OMI_APP_SECRET.length : 'undefined');
-    console.log('🔑 Debug - Session ID:', session_id);
-    console.log('🔑 Debug - Message length:', aiResponse.length);
-    
-    // Send notification using exact format from Omi documentation
+    // Send response back to Omi notification API (Updated)
     const omiResponse = await axios.post(
       `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(session_id)}&message=${encodeURIComponent(aiResponse)}`,
-      {}, // Empty body as required by documentation
+      {}, // Empty body since we're using query parameters
       {
         headers: {
           'Authorization': `Bearer ${process.env.OMI_APP_SECRET}`,
           'Content-Type': 'application/json',
-          'Content-Length': 0  // Fixed: should be number 0, not string '0'
-        },
-        timeout: 10000 // 10 second timeout
+          'Content-Length': '0'
+        }
       }
     );
     
     console.log('📤 Successfully sent response to Omi:', omiResponse.status);
-    console.log('📤 Omi response data:', omiResponse.data);
     
     // Return success response
     res.status(200).json({
@@ -166,21 +140,9 @@ app.post('/omi-webhook', async (req, res) => {
         headers: error.response.headers,
         url: error.config?.url
       });
-      
-      // Special handling for Omi API errors
-      if (error.response.status === 401) {
-        console.error('🔐 OMI API AUTHENTICATION ERROR:');
-        console.error('   - Check if OMI_APP_ID is correct');
-        console.error('   - Check if OMI_APP_SECRET is correct');
-        console.error('   - Verify the App Secret has notification permissions');
-        console.error('   - Current App ID:', process.env.OMI_APP_ID);
-        console.error('   - Current App Secret length:', process.env.OMI_APP_SECRET ? process.env.OMI_APP_SECRET.length : 'undefined');
-      }
-      
       res.status(error.response.status).json({
         error: 'API Error',
-        details: error.response.data,
-        status: error.response.status
+        details: error.response.data
       });
     } else if (error.request) {
       // Network error
