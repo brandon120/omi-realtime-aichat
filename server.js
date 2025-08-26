@@ -128,7 +128,6 @@ app.post('/omi-webhook', async (req, res) => {
     // Send response back to Omi notification API (Updated)
     const omiResponse = await axios.post(
       `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(session_id)}&message=${encodeURIComponent(aiResponse)}`,
-      {}, // Empty body since we're using query parameters
       {
         headers: {
           'Authorization': `Bearer ${process.env.OMI_APP_SECRET}`,
