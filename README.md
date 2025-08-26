@@ -65,8 +65,18 @@ You can test the webhook locally using curl or Postman:
 curl -X POST http://localhost:3000/omi-webhook \
   -H "Content-Type: application/json" \
   -d '{
-    "transcript": "hey omi what is the weather like today?",
-    "user_id": "test_user_123"
+    "session_id": "test_session_123",
+    "segments": [
+      {
+        "id": "test_segment_1",
+        "text": "hey omi what is the weather like today?",
+        "speaker": "SPEAKER_1",
+        "speaker_id": 1,
+        "is_user": false,
+        "start": 0,
+        "end": 5
+      }
+    ]
   }'
 ```
 
@@ -135,8 +145,18 @@ The plugin expects webhook payloads in this format:
 
 ```json
 {
-  "transcript": "hey omi what is artificial intelligence?",
-  "user_id": "user_12345"
+  "session_id": "o0qOP4YkbEUWKE3Vk0hXMnVzH9I3",
+  "segments": [
+    {
+      "id": "6b0b382f-cb57-465c-88e6-baa8de28c455",
+      "text": "What's the weather like in Sydney?",
+      "speaker": "SPEAKER_1",
+      "speaker_id": 1,
+      "is_user": false,
+      "start": 5.624041808510637,
+      "end": 7.533829765957446
+    }
+  ]
 }
 ```
 
