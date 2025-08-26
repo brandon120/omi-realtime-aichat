@@ -91,7 +91,6 @@ app.post('/omi-webhook', async (req, res) => {
     
     if (!question) {
       console.log('⏭️ Skipping transcript - no question after "hey omi"');
-      console.log('📤 NO NOTIFICATION will be sent');
       return res.status(200).json({ 
         message: 'Transcript ignored - no question provided' 
       });
@@ -119,21 +118,30 @@ app.post('/omi-webhook', async (req, res) => {
     const aiResponse = openaiResponse.choices[0].message.content;
     console.log('✨ OpenAI response:', aiResponse);
     
-    // ONLY send notification if we got here (both trigger words found AND valid question)
+    // ONLY REACH THIS POINT IF: both trigger words found AND valid question extracted
+    // Now we can safely send the notification
     console.log('📤 Sending notification to Omi...');
+    console.log('🔑 Debug - App ID:', process.env.OMI_APP_ID);
+    console.log('🔑 Debug - App Secret length:', process.env.OMI_APP_SECRET ? process.env.OMI_APP_SECRET.length : 'undefined');
+    console.log('🔑 Debug - Session ID:', session_id);
+    console.log('🔑 Debug - Message length:', aiResponse.length);
+    
+    // Send notification using exact format from Omi documentation
     const omiResponse = await axios.post(
       `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(session_id)}&message=${encodeURIComponent(aiResponse)}`,
-      {}, // Empty body since we're using query parameters
+      {}, // Empty body as required by documentation
       {
         headers: {
           'Authorization': `Bearer ${process.env.OMI_APP_SECRET}`,
           'Content-Type': 'application/json',
-          'Content-Length': '0'
-        }
+          'Content-Length': 0  // Fixed: should be number 0, not string '0'
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
     
     console.log('📤 Successfully sent response to Omi:', omiResponse.status);
+    console.log('📤 Omi response data:', omiResponse.data);
     
     // Return success response
     res.status(200).json({
@@ -158,9 +166,21 @@ app.post('/omi-webhook', async (req, res) => {
         headers: error.response.headers,
         url: error.config?.url
       });
+      
+      // Special handling for Omi API errors
+      if (error.response.status === 401) {
+        console.error('🔐 OMI API AUTHENTICATION ERROR:');
+        console.error('   - Check if OMI_APP_ID is correct');
+        console.error('   - Check if OMI_APP_SECRET is correct');
+        console.error('   - Verify the App Secret has notification permissions');
+        console.error('   - Current App ID:', process.env.OMI_APP_ID);
+        console.error('   - Current App Secret length:', process.env.OMI_APP_SECRET ? process.env.OMI_APP_SECRET.length : 'undefined');
+      }
+      
       res.status(error.response.status).json({
         error: 'API Error',
-        details: error.response.data
+        details: error.response.data,
+        status: error.response.status
       });
     } else if (error.request) {
       // Network error
