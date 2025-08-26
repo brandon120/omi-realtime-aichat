@@ -75,16 +75,18 @@ app.post('/omi-webhook', async (req, res) => {
     const aiResponse = openaiResponse.choices[0].message.content;
     console.log('✨ OpenAI response:', aiResponse);
     
-    // Send response back to Omi notification API
-    const omiResponse = await axios.post('https://api.omi.me/notify', {
-      user_id: user_id,
-      message: aiResponse
-    }, {
-      headers: {
-        'Authorization': `Bearer ${process.env.OMI_API_KEY}`,
-        'Content-Type': 'application/json'
+    // Send response back to Omi notification API (Updated)
+    const omiResponse = await axios.post(
+      `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(user_id)}&message=${encodeURIComponent(aiResponse)}`,
+      {}, // Empty body since we're using query parameters
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.OMI_APP_SECRET}`,
+          'Content-Type': 'application/json',
+          'Content-Length': '0'
+        }
       }
-    });
+    );
     
     console.log('📤 Successfully sent response to Omi:', omiResponse.status);
     
@@ -103,7 +105,13 @@ app.post('/omi-webhook', async (req, res) => {
     // Handle specific error types
     if (error.response) {
       // API error response
-      console.error('API Error:', error.response.status, error.response.data);
+      console.error('API Error Details:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data,
+        headers: error.response.headers,
+        url: error.config?.url
+      });
       res.status(error.response.status).json({
         error: 'API Error',
         details: error.response.data
@@ -149,12 +157,15 @@ app.listen(PORT, () => {
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
   console.log(`📡 Webhook endpoint: http://localhost:${PORT}/omi-webhook`);
   
-  // Check environment variables
+  // Check environment variables (Updated)
   if (!process.env.OPENAI_KEY) {
     console.warn('⚠️  OPENAI_KEY environment variable is not set');
   }
-  if (!process.env.OMI_API_KEY) {
-    console.warn('⚠️  OMI_API_KEY environment variable is not set');
+  if (!process.env.OMI_APP_ID) {
+    console.warn('⚠️  OMI_APP_ID environment variable is not set');
+  }
+  if (!process.env.OMI_APP_SECRET) {
+    console.warn('⚠️  OMI_APP_SECRET environment variable is not set');
   }
   
   console.log('✅ Server ready to receive Omi webhooks');

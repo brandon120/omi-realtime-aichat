@@ -15,7 +15,7 @@ A Node.js backend plugin for Omi that provides real-time AI chat capabilities us
 
 - Node.js 18+ installed
 - OpenAI API key
-- Omi API key
+- Omi App ID and App Secret
 - Railway account (for deployment)
 
 ## 🛠️ Local Setup
@@ -40,7 +40,8 @@ Edit `.env` with your actual API keys:
 
 ```env
 OPENAI_KEY=sk-your-openai-api-key-here
-OMI_API_KEY=your-omi-api-key-here
+OMI_APP_ID=your_omi_app_id_here
+OMI_APP_SECRET=your_omi_app_secret_here
 PORT=3000
 ```
 
@@ -93,7 +94,8 @@ railway init
 
 ```bash
 railway variables set OPENAI_KEY=sk-your-openai-api-key-here
-railway variables set OMI_API_KEY=your-omi-api-key-here
+railway variables set OMI_APP_ID=your_omi_app_id_here
+railway variables set OMI_APP_SECRET=your_omi_app_secret_here
 ```
 
 ### 5. Deploy
@@ -178,7 +180,8 @@ The plugin provides comprehensive logging:
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
 | `OPENAI_KEY` | OpenAI API key | Yes | - |
-| `OMI_API_KEY` | Omi API key | Yes | - |
+| `OMI_APP_ID` | Omi App ID | Yes | - |
+| `OMI_APP_SECRET` | Omi App Secret | Yes | - |
 | `PORT` | Server port | No | 3000 |
 
 ### OpenAI Configuration
@@ -188,6 +191,14 @@ The plugin uses these GPT-4 settings:
 - **Max Tokens**: 500
 - **Temperature**: 0.7
 - **System Prompt**: "You are a helpful AI assistant. Provide clear, concise, and helpful responses."
+
+### Omi API Configuration
+
+The plugin uses Omi's official notification API:
+- **Endpoint**: `/v2/integrations/{app_id}/notification`
+- **Method**: POST
+- **Authentication**: Bearer token with App Secret
+- **Parameters**: `uid` and `message` as query parameters
 
 ## 🚨 Error Handling
 
@@ -242,7 +253,7 @@ npm test
    - Ensure API key has GPT-4 access
 
 3. **Omi Notification Failures**
-   - Verify Omi API key is correct
+   - Verify Omi App ID and App Secret are correct
    - Check user_id format
    - Ensure plugin has notification permissions
 
