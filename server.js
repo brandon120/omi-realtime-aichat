@@ -43,21 +43,44 @@ app.post('/omi-webhook', async (req, res) => {
     
     console.log('📝 Full transcript:', fullTranscript);
     
-    // Check if transcript contains "hey omi" (case insensitive)
-    if (!fullTranscript.toLowerCase().includes('hey omi')) {
-      console.log('⏭️ Skipping transcript - does not contain "hey omi":', fullTranscript);
+    // Check if transcript contains "hey omi" or similar variations (case insensitive)
+    const transcriptLower = fullTranscript.toLowerCase();
+    const hasHeyOmi = transcriptLower.includes('hey omi') || 
+                      transcriptLower.includes('hey, omi') ||
+                      transcriptLower.includes('hey omi,') ||
+                      transcriptLower.includes('hey, omi,');
+    
+    if (!hasHeyOmi) {
+      console.log('⏭️ Skipping transcript - does not contain "hey omi" or similar:', fullTranscript);
       return res.status(200).json({ 
-        message: 'Transcript ignored - does not contain "hey omi"' 
+        message: 'Transcript ignored - does not contain "hey omi" or similar' 
       });
     }
     
-    // Find the segment that contains "hey omi" and get everything after it
+    // Find the segment that contains "hey omi" or similar and get everything after it
     let question = '';
     for (const segment of segments) {
       const segmentText = segment.text.toLowerCase();
-      if (segmentText.includes('hey omi')) {
-        const heyOmiIndex = segmentText.indexOf('hey omi');
-        question = segment.text.substring(heyOmiIndex + 8).trim();
+      let heyOmiIndex = -1;
+      let heyOmiLength = 0;
+      
+      // Check for different variations of "hey omi"
+      if (segmentText.includes('hey, omi')) {
+        heyOmiIndex = segmentText.indexOf('hey, omi');
+        heyOmiLength = 'hey, omi'.length;
+      } else if (segmentText.includes('hey omi,')) {
+        heyOmiIndex = segmentText.indexOf('hey omi,');
+        heyOmiLength = 'hey omi,'.length;
+      } else if (segmentText.includes('hey, omi,')) {
+        heyOmiIndex = segmentText.indexOf('hey, omi,');
+        heyOmiLength = 'hey, omi,'.length;
+      } else if (segmentText.includes('hey omi')) {
+        heyOmiIndex = segmentText.indexOf('hey omi');
+        heyOmiLength = 'hey omi'.length;
+      }
+      
+      if (heyOmiIndex !== -1) {
+        question = segment.text.substring(heyOmiIndex + heyOmiLength).trim();
         
         // If this segment doesn't have enough content after "hey omi", 
         // look for content in subsequent segments
