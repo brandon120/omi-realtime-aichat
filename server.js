@@ -43,25 +43,36 @@ app.post('/omi-webhook', async (req, res) => {
     
     console.log('📝 Full transcript:', fullTranscript);
     
-    // Check if transcript contains "hey omi" (case insensitive)
-    if (!fullTranscript.toLowerCase().includes('hey omi')) {
-      console.log('⏭️ Skipping transcript - does not contain "hey omi":', fullTranscript);
+    // Check if transcript contains both "hey" and "omi" (case insensitive)
+    const transcriptLower = fullTranscript.toLowerCase();
+    const hasHey = transcriptLower.includes('hey');
+    const hasOmi = transcriptLower.includes('omi');
+    
+    console.log('🔍 Checking for trigger words:', { hasHey, hasOmi });
+    
+    if (!hasHey || !hasOmi) {
+      console.log('⏭️ SKIPPING - Missing required trigger words. Transcript:', fullTranscript);
+      console.log('📤 NO NOTIFICATION will be sent');
       return res.status(200).json({ 
-        message: 'Transcript ignored - does not contain "hey omi"' 
+        message: 'Transcript ignored - does not contain both "hey" and "omi"',
+        trigger_words_found: { hasHey, hasOmi }
       });
     }
     
-    // Find the segment that contains "hey omi" and get everything after it
+    console.log('✅ TRIGGER WORDS FOUND - Both "hey" and "omi" detected');
+    console.log('📤 NOTIFICATION WILL BE SENT after processing');
+    
+    // Find the segment that contains "hey" and get everything after it
     let question = '';
     for (const segment of segments) {
       const segmentText = segment.text.toLowerCase();
-      if (segmentText.includes('hey omi')) {
-        const heyOmiIndex = segmentText.indexOf('hey omi');
-        question = segment.text.substring(heyOmiIndex + 8).trim();
+      if (segmentText.includes('hey')) {
+        const heyIndex = segmentText.indexOf('hey');
+        question = segment.text.substring(heyIndex + 3).trim(); // Remove "hey" and trim
         
-        // If this segment doesn't have enough content after "hey omi", 
+        // If this segment doesn't have enough content after "hey", 
         // look for content in subsequent segments
-        if (!question) {
+        if (!question || question.length < 5) { // Less than 5 chars probably isn't a real question
           const currentIndex = segments.indexOf(segment);
           const remainingSegments = segments.slice(currentIndex + 1);
           question = remainingSegments
@@ -73,8 +84,14 @@ app.post('/omi-webhook', async (req, res) => {
       }
     }
     
+    // Clean up the question - remove "omi" and any punctuation around it
+    if (question) {
+      question = question.replace(/^[,.\s]*omi[,.\s]*/i, '').trim();
+    }
+    
     if (!question) {
       console.log('⏭️ Skipping transcript - no question after "hey omi"');
+      console.log('📤 NO NOTIFICATION will be sent');
       return res.status(200).json({ 
         message: 'Transcript ignored - no question provided' 
       });
@@ -102,7 +119,8 @@ app.post('/omi-webhook', async (req, res) => {
     const aiResponse = openaiResponse.choices[0].message.content;
     console.log('✨ OpenAI response:', aiResponse);
     
-    // Send response back to Omi notification API (Updated)
+    // ONLY send notification if we got here (both trigger words found AND valid question)
+    console.log('📤 Sending notification to Omi...');
     const omiResponse = await axios.post(
       `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(session_id)}&message=${encodeURIComponent(aiResponse)}`,
       {}, // Empty body since we're using query parameters
