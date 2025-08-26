@@ -25,26 +25,53 @@ app.post('/omi-webhook', async (req, res) => {
   try {
     console.log('📥 Received webhook from Omi:', JSON.stringify(req.body, null, 2));
     
-    const { transcript, user_id } = req.body;
+    const { session_id, segments } = req.body;
     
     // Validate required fields
-    if (!transcript || !user_id) {
-      console.error('❌ Missing required fields:', { transcript, user_id });
+    if (!session_id || !segments || !Array.isArray(segments)) {
+      console.error('❌ Missing required fields:', { session_id, segments });
       return res.status(400).json({ 
-        error: 'Missing required fields: transcript and user_id are required' 
+        error: 'Missing required fields: session_id and segments array are required' 
       });
     }
     
-    // Check if transcript starts with "hey omi"
-    if (!transcript.toLowerCase().startsWith('hey omi')) {
-      console.log('⏭️ Skipping transcript - does not start with "hey omi":', transcript);
+    // Extract all text from segments and join them
+    const fullTranscript = segments
+      .map(segment => segment.text)
+      .join(' ')
+      .trim();
+    
+    console.log('📝 Full transcript:', fullTranscript);
+    
+    // Check if transcript contains "hey omi" (case insensitive)
+    if (!fullTranscript.toLowerCase().includes('hey omi')) {
+      console.log('⏭️ Skipping transcript - does not contain "hey omi":', fullTranscript);
       return res.status(200).json({ 
-        message: 'Transcript ignored - does not start with "hey omi"' 
+        message: 'Transcript ignored - does not contain "hey omi"' 
       });
     }
     
-    // Extract the question (everything after "hey omi")
-    const question = transcript.substring(8).trim();
+    // Find the segment that contains "hey omi" and get everything after it
+    let question = '';
+    for (const segment of segments) {
+      const segmentText = segment.text.toLowerCase();
+      if (segmentText.includes('hey omi')) {
+        const heyOmiIndex = segmentText.indexOf('hey omi');
+        question = segment.text.substring(heyOmiIndex + 8).trim();
+        
+        // If this segment doesn't have enough content after "hey omi", 
+        // look for content in subsequent segments
+        if (!question) {
+          const currentIndex = segments.indexOf(segment);
+          const remainingSegments = segments.slice(currentIndex + 1);
+          question = remainingSegments
+            .map(s => s.text)
+            .join(' ')
+            .trim();
+        }
+        break;
+      }
+    }
     
     if (!question) {
       console.log('⏭️ Skipping transcript - no question after "hey omi"');
@@ -77,7 +104,7 @@ app.post('/omi-webhook', async (req, res) => {
     
     // Send response back to Omi notification API (Updated)
     const omiResponse = await axios.post(
-      `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(user_id)}&message=${encodeURIComponent(aiResponse)}`,
+      `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(session_id)}&message=${encodeURIComponent(aiResponse)}`,
       {}, // Empty body since we're using query parameters
       {
         headers: {
@@ -96,7 +123,8 @@ app.post('/omi-webhook', async (req, res) => {
       message: 'Question processed and response sent to Omi',
       question: question,
       ai_response: aiResponse,
-      omi_status: omiResponse.status
+      omi_status: omiResponse.status,
+      session_id: session_id
     });
     
   } catch (error) {
