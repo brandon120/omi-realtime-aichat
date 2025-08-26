@@ -133,7 +133,6 @@ app.post('/omi-webhook', async (req, res) => {
         headers: {
           'Authorization': `Bearer ${process.env.OMI_APP_SECRET}`,
           'Content-Type': 'application/json',
-          'Content-Length': 0
         }
       }
     );
