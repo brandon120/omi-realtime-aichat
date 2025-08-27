@@ -35,36 +35,12 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_KEY,
 });
 
-// Create an assistant with web search capability
-let assistant = null;
-async function createAssistant() {
-  try {
-    assistant = await openai.beta.assistants.create({
-      name: "Omi AI Assistant",
-      instructions: "You are a helpful AI assistant. Use web search when needed to provide accurate, up-to-date information.",
-      model: "gpt-4o",
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "searchWeb",
-            description: "Performs a real-time web search for the user's query.",
-            parameters: {
-              type: "object",
-              properties: {
-                query: { type: "string", description: "The search query." }
-              },
-              required: ["query"]
-            }
-          }
-        }
-      ],
-    });
-    console.log('✅ Created OpenAI assistant with web search function:', assistant.id);
-  } catch (error) {
-    console.error('❌ Failed to create assistant:', error);
-  }
-}
+// OpenAI Responses API configuration
+const OPENAI_MODEL = "gpt-4o"; // You can change this to "gpt-4.1" when available
+const WEB_SEARCH_TOOL = { type: "web_search_preview" };
+
+// No need to create an assistant - Responses API handles everything
+console.log('✅ Using OpenAI Responses API with web search');
 
 /**
  * Sends a direct notification to an Omi user with rate limiting.
@@ -167,36 +143,7 @@ function getRateLimitStatus(userId) {
     };
 }
 
-/**
- * Performs a web search using DuckDuckGo (free, no API key required)
- * @param {string} query - The search query
- * @returns {Promise<object>} Search results
- */
-async function performWebSearch(query) {
-    try {
-        const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-        
-        return new Promise((resolve, reject) => {
-            const req = https.get(searchUrl, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try {
-                        const results = JSON.parse(data);
-                        resolve(results);
-                    } catch (e) {
-                        reject(new Error('Failed to parse search results'));
-                    }
-                });
-            });
-            req.on('error', reject);
-            req.setTimeout(10000, () => reject(new Error('Search timeout')));
-        });
-    } catch (error) {
-        console.error('❌ Web search error:', error);
-        return { error: 'Search failed', message: error.message };
-    }
-}
+// Web search is now handled automatically by OpenAI's web_search_preview tool
 
 // Middleware
 app.use(express.json());
@@ -223,6 +170,11 @@ app.get('/health', (req, res) => {
       max_notifications_per_hour: MAX_NOTIFICATIONS_PER_HOUR,
       active_users: notificationHistory.size,
       note: 'Check /rate-limit/:userId for specific user status'
+    },
+    api: {
+      type: 'OpenAI Responses API',
+      model: OPENAI_MODEL,
+      web_search: 'web_search_preview tool enabled'
     }
   });
 });
@@ -255,7 +207,12 @@ app.get('/help', (req, res) => {
         'keywords', 'trigger words', 'how to talk to you'
       ]
     },
-    note: 'The AI will only respond when you use the trigger phrases. Regular messages without these phrases will be ignored unless you\'re asking for help.'
+    note: 'The AI will only respond when you use the trigger phrases. Regular messages without these phrases will be ignored unless you\'re asking for help.',
+    features: {
+      web_search: 'Built-in web search for current information',
+      natural_language: 'Understands natural conversation patterns',
+      rate_limiting: 'Smart rate limiting to prevent API errors'
+    }
   });
 });
 
@@ -396,105 +353,52 @@ app.post('/omi-webhook', async (req, res) => {
       });
     }
     
-    console.log('🤖 Processing question:', question);
-    
-    // Use OpenAI Assistants API with built-in web search
-    console.log('🤖 Using OpenAI Assistant with web search for:', question);
-    
-    let aiResponse = '';
-    
-         try {
-         // Create a thread
-         const thread = await openai.beta.threads.create();
-         
-         // Add the user's question to the thread
-         await openai.beta.threads.messages.create(thread.id, {
-             role: "user",
-             content: question,
+         console.log('🤖 Processing question:', question);
+     
+     // Use OpenAI Responses API with built-in web search
+     console.log('🤖 Using OpenAI Responses API with web search for:', question);
+     
+     let aiResponse = '';
+     
+     try {
+         // Use the new Responses API with web search
+         const response = await openai.responses.create({
+             model: OPENAI_MODEL,
+             tools: [WEB_SEARCH_TOOL],
+             input: question,
          });
          
-         // Run the assistant
-         const run = await openai.beta.threads.runs.create(thread.id, {
-             assistant_id: assistant.id,
-         });
+         aiResponse = response.output_text;
+         console.log('✨ OpenAI Responses API response:', aiResponse);
          
-         // Wait for the run to complete or require action
-         let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-         while (runStatus.status === "in_progress" || runStatus.status === "queued") {
-             await new Promise(resolve => setTimeout(resolve, 1000));
-             runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+         // Log additional response data for debugging
+         if (response.tool_use && response.tool_use.length > 0) {
+             console.log('🔍 Web search tool was used:', response.tool_use);
          }
-         
-         // Handle tool calls if required
-         if (runStatus.status === "requires_action" && runStatus.required_action?.type === "submit_tool_outputs") {
-             console.log('🔍 Tool call required, processing searchWeb function');
-             
-             const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
-             const toolOutputs = [];
-             
-             for (const toolCall of toolCalls) {
-                 if (toolCall.function.name === "searchWeb") {
-                     try {
-                         const args = JSON.parse(toolCall.function.arguments);
-                         const query = args.query;
-                         
-                         console.log('🔍 Searching web for:', query);
-                         const results = await performWebSearch(query);
-                         
-                         // Extract summary from search results
-                         const summary = results?.Abstract || results?.RelatedTopics?.[0]?.Text || "No relevant information found.";
-                         
-                         toolOutputs.push({
-                             tool_call_id: toolCall.id,
-                             output: summary
-                         });
-                         
-                         console.log('✨ Web search completed, summary:', summary);
-                     } catch (error) {
-                         console.error('❌ Error processing searchWeb tool call:', error);
-                         toolOutputs.push({
-                             tool_call_id: toolCall.id,
-                             output: "Search failed. Please try again later."
-                         });
-                     }
-                 }
-             }
-             
-             // Submit tool outputs
-             if (toolOutputs.length > 0) {
-                 await openai.beta.threads.runs.submitToolOutputs(thread.id, run.id, {
-                     tool_outputs: toolOutputs
-                 });
-                 
-                 // Wait for the assistant to finish processing
-                 runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-                 while (runStatus.status === "in_progress" || runStatus.status === "queued") {
-                     await new Promise(resolve => setTimeout(resolve, 1000));
-                     runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-                 }
-             }
-         }
-         
-         // Get the final response
-         const messages = await openai.beta.threads.messages.list(thread.id);
-         aiResponse = messages.data[0].content[0].text.value;
-         
-         console.log('✨ OpenAI Assistant response:', aiResponse);
          
      } catch (error) {
-         console.error('❌ OpenAI Assistant error:', error);
-         // Fallback to regular chat completion
-         const openaiResponse = await openai.chat.completions.create({
-             model: 'gpt-4',
-             messages: [
-                 { role: 'system', content: 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.' },
-                 { role: 'user', content: question }
-             ],
-             max_tokens: 800,
-             temperature: 0.7,
-         });
-         aiResponse = openaiResponse.choices[0].message.content;
-         console.log('✨ Fallback OpenAI response:', aiResponse);
+         console.error('❌ OpenAI Responses API error:', error);
+         
+         // Fallback to regular chat completion if Responses API fails
+         try {
+             const openaiResponse = await openai.chat.completions.create({
+                 model: 'gpt-4o',
+                 messages: [
+                     { 
+                         role: 'system', 
+                         content: 'You are a helpful AI assistant. When users ask about current events, weather, news, or time-sensitive information, be honest about your knowledge cutoff and suggest they check reliable sources for the most up-to-date information. For general knowledge questions, provide helpful and accurate responses.' 
+                     },
+                     { role: 'user', content: question }
+                 ],
+                 max_tokens: 800,
+                 temperature: 0.7,
+             });
+             aiResponse = openaiResponse.choices[0].message.content;
+             console.log('✨ Fallback OpenAI response:', aiResponse);
+         } catch (fallbackError) {
+             console.error('❌ Fallback also failed:', fallbackError);
+             aiResponse = "I'm sorry, I'm experiencing technical difficulties. Please try again later.";
+         }
      }
     
          // Send response back to Omi using the new function
@@ -612,8 +516,8 @@ app.listen(PORT, async () => {
     console.warn('⚠️  OMI_APP_SECRET environment variable is not set');
   }
   
-  // Create OpenAI assistant with web search
-  await createAssistant();
+     // OpenAI Responses API is ready to use
+   console.log('✅ OpenAI Responses API ready with web search capability');
   
      // Set up session cleanup every 5 minutes
    setInterval(() => {
