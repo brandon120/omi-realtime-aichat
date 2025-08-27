@@ -179,13 +179,11 @@ app.post('/omi-webhook', async (req, res) => {
           help_response: helpMessage,
           instructions: 'Start your message with "Hey Omi" to get help from the AI assistant.'
         });
-      } else {
-        // User didn't use trigger phrase and isn't asking for help - silently ignore
-        console.log('⏭️ Skipping transcript - does not contain "hey omi" and no help requested:', fullTranscript);
-        return res.status(200).json({ 
-          message: 'Transcript ignored - no action required' 
-        });
-      }
+             } else {
+         // User didn't use trigger phrase and isn't asking for help - silently ignore
+         console.log('⏭️ Skipping transcript - does not contain "hey omi" and no help requested:', fullTranscript);
+         return res.status(200).json({}); // Return empty response - no message
+       }
     }
     
     // Find the segment that contains "hey omi" or similar and get everything after it
@@ -317,6 +315,7 @@ app.use('*', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
+  console.log('🔐 OMI_APP_SECRET being used:', process.env.OMI_APP_SECRET);
   console.log('🚀 Omi AI Chat Plugin server started');
   console.log(`📍 Server running on port ${PORT}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
