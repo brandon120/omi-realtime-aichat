@@ -34,9 +34,24 @@ async function createAssistant() {
       name: "Omi AI Assistant",
       instructions: "You are a helpful AI assistant. Use web search when needed to provide accurate, up-to-date information.",
       model: "gpt-4o",
-      tools: [{ type: "web_search" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "searchWeb",
+            description: "Performs a real-time web search for the user's query.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string", description: "The search query." }
+              },
+              required: ["query"]
+            }
+          }
+        }
+      ],
     });
-    console.log('✅ Created OpenAI assistant with web search:', assistant.id);
+    console.log('✅ Created OpenAI assistant with web search function:', assistant.id);
   } catch (error) {
     console.error('❌ Failed to create assistant:', error);
   }
@@ -285,54 +300,99 @@ app.post('/omi-webhook', async (req, res) => {
     
     let aiResponse = '';
     
-    try {
-        // Create a thread
-        const thread = await openai.beta.threads.create();
-        
-        // Add the user's question to the thread
-        await openai.beta.threads.messages.create(thread.id, {
-            role: "user",
-            content: question,
-        });
-        
-        // Run the assistant
-        const run = await openai.beta.threads.runs.create(thread.id, {
-            assistant_id: assistant.id,
-        });
-        
-        // Wait for the run to complete
-        let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-        while (runStatus.status === "in_progress" || runStatus.status === "queued") {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-        }
-        
-        // Get the response
-        const messages = await openai.beta.threads.messages.list(thread.id);
-        aiResponse = messages.data[0].content[0].text.value;
-        
-        console.log('✨ OpenAI Assistant response:', aiResponse);
-        
-        // Check if web search was used
-        if (runStatus.required_action?.type === 'submit_tool_outputs') {
-            console.log('🔍 Web search was used by the assistant');
-        }
-        
-    } catch (error) {
-        console.error('❌ OpenAI Assistant error:', error);
-        // Fallback to regular chat completion
-        const openaiResponse = await openai.chat.completions.create({
-            model: 'gpt-4',
-            messages: [
-                { role: 'system', content: 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.' },
-                { role: 'user', content: question }
-            ],
-            max_tokens: 800,
-            temperature: 0.7,
-        });
-        aiResponse = openaiResponse.choices[0].message.content;
-        console.log('✨ Fallback OpenAI response:', aiResponse);
-    }
+         try {
+         // Create a thread
+         const thread = await openai.beta.threads.create();
+         
+         // Add the user's question to the thread
+         await openai.beta.threads.messages.create(thread.id, {
+             role: "user",
+             content: question,
+         });
+         
+         // Run the assistant
+         const run = await openai.beta.threads.runs.create(thread.id, {
+             assistant_id: assistant.id,
+         });
+         
+         // Wait for the run to complete or require action
+         let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+         while (runStatus.status === "in_progress" || runStatus.status === "queued") {
+             await new Promise(resolve => setTimeout(resolve, 1000));
+             runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+         }
+         
+         // Handle tool calls if required
+         if (runStatus.status === "requires_action" && runStatus.required_action?.type === "submit_tool_outputs") {
+             console.log('🔍 Tool call required, processing searchWeb function');
+             
+             const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
+             const toolOutputs = [];
+             
+             for (const toolCall of toolCalls) {
+                 if (toolCall.function.name === "searchWeb") {
+                     try {
+                         const args = JSON.parse(toolCall.function.arguments);
+                         const query = args.query;
+                         
+                         console.log('🔍 Searching web for:', query);
+                         const results = await performWebSearch(query);
+                         
+                         // Extract summary from search results
+                         const summary = results?.Abstract || results?.RelatedTopics?.[0]?.Text || "No relevant information found.";
+                         
+                         toolOutputs.push({
+                             tool_call_id: toolCall.id,
+                             output: summary
+                         });
+                         
+                         console.log('✨ Web search completed, summary:', summary);
+                     } catch (error) {
+                         console.error('❌ Error processing searchWeb tool call:', error);
+                         toolOutputs.push({
+                             tool_call_id: toolCall.id,
+                             output: "Search failed. Please try again later."
+                         });
+                     }
+                 }
+             }
+             
+             // Submit tool outputs
+             if (toolOutputs.length > 0) {
+                 await openai.beta.threads.runs.submitToolOutputs(thread.id, run.id, {
+                     tool_outputs: toolOutputs
+                 });
+                 
+                 // Wait for the assistant to finish processing
+                 runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+                 while (runStatus.status === "in_progress" || runStatus.status === "queued") {
+                     await new Promise(resolve => setTimeout(resolve, 1000));
+                     runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+                 }
+             }
+         }
+         
+         // Get the final response
+         const messages = await openai.beta.threads.messages.list(thread.id);
+         aiResponse = messages.data[0].content[0].text.value;
+         
+         console.log('✨ OpenAI Assistant response:', aiResponse);
+         
+     } catch (error) {
+         console.error('❌ OpenAI Assistant error:', error);
+         // Fallback to regular chat completion
+         const openaiResponse = await openai.chat.completions.create({
+             model: 'gpt-4',
+             messages: [
+                 { role: 'system', content: 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.' },
+                 { role: 'user', content: question }
+             ],
+             max_tokens: 800,
+             temperature: 0.7,
+         });
+         aiResponse = openaiResponse.choices[0].message.content;
+         console.log('✨ Fallback OpenAI response:', aiResponse);
+     }
     
     // Send response back to Omi using the new function
     const omiResponse = await sendOmiNotification(session_id, aiResponse);
