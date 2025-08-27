@@ -21,6 +21,9 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Session storage to accumulate transcript segments
+const sessionTranscripts = new Map();
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_KEY,
@@ -204,22 +207,39 @@ app.post('/omi-webhook', async (req, res) => {
       });
     }
     
-    // Extract all text from segments and join them
-    const fullTranscript = segments
+    // Accumulate transcript segments for this session
+    if (!sessionTranscripts.has(session_id)) {
+      sessionTranscripts.set(session_id, []);
+    }
+    
+    // Add new segments to the session
+    const sessionSegments = sessionTranscripts.get(session_id);
+    sessionSegments.push(...segments);
+    
+    // Extract all text from accumulated segments and join them
+    const fullTranscript = sessionSegments
       .map(segment => segment.text)
       .join(' ')
       .trim();
     
-    console.log('📝 Full transcript:', fullTranscript);
+    console.log('📝 Accumulated transcript for session:', fullTranscript);
+    console.log('📊 Total segments in session:', sessionSegments.length);
     
-    // Check if transcript contains "hey omi" or similar variations (case insensitive)
+        // Smart AI interaction detection
     const transcriptLower = fullTranscript.toLowerCase();
+    
+    // Primary trigger: "Hey Omi" variations
     const hasHeyOmi = transcriptLower.includes('hey omi') || 
                       transcriptLower.includes('hey, omi') ||
                       transcriptLower.includes('hey omi,') ||
                       transcriptLower.includes('hey, omi,');
     
-    // Check if user is asking for help or instructions
+    // Secondary triggers: Natural language patterns
+    const isQuestion = /\b(who|what|where|when|why|how|can you|could you|would you|tell me|show me|find|search|look up)\b/i.test(fullTranscript);
+    const isCommand = /\b(weather|news|temperature|time|date|current|today|now|latest|help me|i need|find out)\b/i.test(fullTranscript);
+    const isConversational = fullTranscript.endsWith('?') || fullTranscript.includes('?');
+    
+    // Help keywords
     const helpKeywords = [
       'help', 'what can you do', 'how to use', 'instructions', 'guide',
       'what do you do', 'how does this work', 'what are the commands',
@@ -230,61 +250,63 @@ app.post('/omi-webhook', async (req, res) => {
       transcriptLower.includes(keyword)
     );
     
-    if (!hasHeyOmi) {
+    // Determine if user wants AI interaction
+    const wantsAIInteraction = hasHeyOmi || (isQuestion && isCommand) || (isConversational && isCommand);
+    
+    if (!wantsAIInteraction) {
       if (isAskingForHelp) {
         // User is asking for help, provide helpful response
-        const helpMessage = `Hi! I'm Omi, your AI assistant. To talk to me, start your message with "Hey Omi" or "Hey, Omi" followed by your question. For example: "Hey Omi, what's the weather like?" or "Hey, Omi, can you help me with math?"`;
+        const helpMessage = `Hi! I'm Omi, your AI assistant. You can talk to me naturally! Try asking questions like "What's the weather like?" or "Can you search for current news?" I'll automatically detect when you need my help.`;
         
         console.log('💡 User asked for help, providing instructions');
+        // Clear the session transcript after help response
+        sessionTranscripts.delete(session_id);
+        console.log('🧹 Cleared session transcript for help request:', session_id);
         return res.status(200).json({ 
-          message: 'Start your message with "Hey Omi" to get help from the AI assistant',
+          message: 'You can talk to me naturally! Try asking questions or giving commands.',
           help_response: helpMessage,
-          instructions: 'Start your message with "Hey Omi" to get help from the AI assistant.'
+          instructions: 'Ask questions naturally or use "Hey Omi" to be explicit.'
         });
-             } else {
-         // User didn't use trigger phrase and isn't asking for help - silently ignore
-         console.log('⏭️ Skipping transcript - does not contain "hey omi" and no help requested:', fullTranscript);
-         return res.status(200).json({}); // Return empty response - no message
-       }
+      } else {
+        // User didn't trigger AI interaction - silently ignore
+        console.log('⏭️ Skipping transcript - no AI interaction detected:', fullTranscript);
+        return res.status(200).json({}); // Return empty response - no message
+      }
     }
     
-    // Find the segment that contains "hey omi" or similar and get everything after it
-    let question = '';
-    for (const segment of segments) {
-      const segmentText = segment.text.toLowerCase();
-      
-      // Define all possible variations of "hey omi"
-      const heyOmiPatterns = ['hey, omi', 'hey omi,', 'hey, omi,', 'hey omi', 'Hey, Omi', 'Hey Omi.', 'Hey Omi,', 'search the web', 'search the internet', 'search the web for', 'search the internet for'];
-      
-      // Find which pattern exists in this segment
-      let foundPattern = null;
-      let patternIndex = -1;
-      
-      for (const pattern of heyOmiPatterns) {
-        if (segmentText.includes(pattern)) {
-          foundPattern = pattern;
-          patternIndex = segmentText.indexOf(pattern);
-          break;
-        }
-      }
-      
-      if (foundPattern) {
-        // Extract the question after the found pattern
-        question = segment.text.substring(patternIndex + foundPattern.length).trim();
-        
-        // If this segment doesn't have enough content after "hey omi", 
-        // look for content in subsequent segments
-        if (!question) {
-          const currentIndex = segments.indexOf(segment);
-          const remainingSegments = segments.slice(currentIndex + 1);
-          question = remainingSegments
-            .map(s => s.text)
-            .join(' ')
-            .trim();
-        }
-        break;
-      }
-    }
+         // Extract the question from the accumulated transcript
+     let question = '';
+     
+     if (hasHeyOmi) {
+       // If "Hey Omi" was used, extract everything after it
+       for (const segment of sessionSegments) {
+         const segmentText = segment.text.toLowerCase();
+         const heyOmiPatterns = ['hey, omi', 'hey omi,', 'hey, omi,', 'hey omi', 'Hey, Omi', 'Hey Omi.', 'Hey Omi,'];
+         
+         for (const pattern of heyOmiPatterns) {
+           if (segmentText.includes(pattern)) {
+             const patternIndex = segmentText.indexOf(pattern);
+             question = segment.text.substring(patternIndex + pattern.length).trim();
+             break;
+           }
+         }
+         if (question) break;
+       }
+       
+       // If no question found after "Hey Omi", use remaining segments
+       if (!question) {
+         const heyOmiIndex = sessionSegments.findIndex(segment => 
+           heyOmiPatterns.some(pattern => segment.text.toLowerCase().includes(pattern))
+         );
+         if (heyOmiIndex !== -1) {
+           const remainingSegments = sessionSegments.slice(heyOmiIndex + 1);
+           question = remainingSegments.map(s => s.text).join(' ').trim();
+         }
+       }
+     } else {
+       // For natural language detection, use the full transcript
+       question = fullTranscript;
+     }
     
     if (!question) {
       console.log('⏭️ Skipping transcript - no question after "hey omi"');
@@ -394,20 +416,24 @@ app.post('/omi-webhook', async (req, res) => {
          console.log('✨ Fallback OpenAI response:', aiResponse);
      }
     
-    // Send response back to Omi using the new function
-    const omiResponse = await sendOmiNotification(session_id, aiResponse);
-    
-    console.log('📤 Successfully sent response to Omi:', omiResponse);
-    
-    // Return success response
-    res.status(200).json({
-      success: true,
-      message: aiResponse,
-      question: question,
-      ai_response: aiResponse,
-      omi_response: omiResponse,
-      session_id: session_id
-    });
+         // Send response back to Omi using the new function
+     const omiResponse = await sendOmiNotification(session_id, aiResponse);
+     
+     console.log('📤 Successfully sent response to Omi:', omiResponse);
+     
+     // Clear the session transcript after successful processing
+     sessionTranscripts.delete(session_id);
+     console.log('🧹 Cleared session transcript for:', session_id);
+     
+     // Return success response
+     res.status(200).json({
+       success: true,
+       message: aiResponse,
+       question: question,
+       ai_response: aiResponse,
+       omi_response: omiResponse,
+       session_id: session_id
+     });
     
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
@@ -475,6 +501,25 @@ app.listen(PORT, async () => {
   
   // Create OpenAI assistant with web search
   await createAssistant();
+  
+  // Set up session cleanup every 5 minutes
+  setInterval(() => {
+    const now = Date.now();
+    const fiveMinutesAgo = now - (5 * 60 * 1000);
+    
+    for (const [sessionId, segments] of sessionTranscripts.entries()) {
+      // Check if any segment is older than 5 minutes
+      const hasOldSegment = segments.some(segment => {
+        // Use segment.end time if available, otherwise assume recent
+        return segment.end && (segment.end * 1000) < fiveMinutesAgo;
+      });
+      
+      if (hasOldSegment) {
+        sessionTranscripts.delete(sessionId);
+        console.log('🧹 Cleaned up old session:', sessionId);
+      }
+    }
+  }, 5 * 60 * 1000); // 5 minutes
   
   console.log('✅ Server ready to receive Omi webhooks');
 });
