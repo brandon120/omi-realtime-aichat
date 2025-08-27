@@ -61,26 +61,25 @@ app.post('/omi-webhook', async (req, res) => {
     let question = '';
     for (const segment of segments) {
       const segmentText = segment.text.toLowerCase();
-      let heyOmiIndex = -1;
-      let heyOmiLength = 0;
       
-      // Check for different variations of "hey omi"
-      if (segmentText.includes('hey, omi')) {
-        heyOmiIndex = segmentText.indexOf('hey, omi');
-        heyOmiLength = 'hey, omi'.length;
-      } else if (segmentText.includes('hey omi,')) {
-        heyOmiIndex = segmentText.indexOf('hey omi,');
-        heyOmiLength = 'hey omi,'.length;
-      } else if (segmentText.includes('hey, omi,')) {
-        heyOmiIndex = segmentText.indexOf('hey, omi,');
-        heyOmiLength = 'hey, omi,'.length;
-      } else if (segmentText.includes('hey omi')) {
-        heyOmiIndex = segmentText.indexOf('hey omi');
-        heyOmiLength = 'hey omi'.length;
+      // Define all possible variations of "hey omi"
+      const heyOmiPatterns = ['hey, omi', 'hey omi,', 'hey, omi,', 'hey omi', 'Hey, Omi', 'Hey Omi.', 'Hey Omi,'];
+      
+      // Find which pattern exists in this segment
+      let foundPattern = null;
+      let patternIndex = -1;
+      
+      for (const pattern of heyOmiPatterns) {
+        if (segmentText.includes(pattern)) {
+          foundPattern = pattern;
+          patternIndex = segmentText.indexOf(pattern);
+          break;
+        }
       }
       
-      if (heyOmiIndex !== -1) {
-        question = segment.text.substring(heyOmiIndex + heyOmiLength).trim();
+      if (foundPattern) {
+        // Extract the question after the found pattern
+        question = segment.text.substring(patternIndex + foundPattern.length).trim();
         
         // If this segment doesn't have enough content after "hey omi", 
         // look for content in subsequent segments
