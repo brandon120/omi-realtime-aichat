@@ -175,7 +175,7 @@ app.post('/omi-webhook', async (req, res) => {
         
         console.log('💡 User asked for help, providing instructions');
         return res.status(200).json({ 
-          message: 'Help requested',
+          message: 'Start your message with "Hey Omi" to get help from the AI assistant',
           help_response: helpMessage,
           instructions: 'Start your message with "Hey Omi" to get help from the AI assistant.'
         });
