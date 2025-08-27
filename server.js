@@ -254,7 +254,7 @@ app.post('/omi-webhook', async (req, res) => {
       const segmentText = segment.text.toLowerCase();
       
       // Define all possible variations of "hey omi"
-      const heyOmiPatterns = ['hey, omi', 'hey omi,', 'hey, omi,', 'hey omi', 'Hey, Omi', 'Hey Omi.', 'Hey Omi,'];
+      const heyOmiPatterns = ['hey, omi', 'hey omi,', 'hey, omi,', 'hey omi', 'Hey, Omi', 'Hey Omi.', 'Hey Omi,', 'search the web', 'search the internet', 'search the web for', 'search the internet for'];
       
       // Find which pattern exists in this segment
       let foundPattern = null;
