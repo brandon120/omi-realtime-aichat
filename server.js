@@ -231,7 +231,6 @@ app.use('*', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log('🔐 OMI_APP_SECRET being used:', process.env.OMI_APP_SECRET);
   console.log('🚀 Omi AI Chat Plugin server started');
   console.log(`📍 Server running on port ${PORT}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
