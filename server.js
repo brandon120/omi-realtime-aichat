@@ -24,6 +24,12 @@ const PORT = process.env.PORT || 3000;
 // Session storage to accumulate transcript segments
 const sessionTranscripts = new Map();
 
+// Rate limiting for Omi notifications (max 10 per hour)
+const notificationQueue = [];
+const notificationHistory = new Map(); // Track notifications per user
+const MAX_NOTIFICATIONS_PER_HOUR = 10;
+const RATE_LIMIT_WINDOW = 60 * 60 * 1000; // 1 hour in milliseconds
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_KEY,
@@ -61,17 +67,34 @@ async function createAssistant() {
 }
 
 /**
- * Sends a direct notification to an Omi user.
+ * Sends a direct notification to an Omi user with rate limiting.
  * @param {string} userId - The Omi user's unique ID
  * @param {string} message - The notification text
  * @returns {Promise<object>} Response data or error
  */
-function sendOmiNotification(userId, message) {
+async function sendOmiNotification(userId, message) {
     const appId = process.env.OMI_APP_ID;
     const appSecret = process.env.OMI_APP_SECRET;
 
     if (!appId) throw new Error("OMI_APP_ID not set");
     if (!appSecret) throw new Error("OMI_APP_SECRET not set");
+
+    // Check rate limit for this user
+    const now = Date.now();
+    const userHistory = notificationHistory.get(userId) || [];
+    
+    // Remove notifications older than 1 hour
+    const recentNotifications = userHistory.filter(timestamp => 
+        now - timestamp < RATE_LIMIT_WINDOW
+    );
+    
+    if (recentNotifications.length >= MAX_NOTIFICATIONS_PER_HOUR) {
+        const oldestNotification = recentNotifications[0];
+        const timeUntilReset = RATE_LIMIT_WINDOW - (now - oldestNotification);
+        const minutesUntilReset = Math.ceil(timeUntilReset / (60 * 1000));
+        
+        throw new Error(`Rate limit exceeded. Maximum ${MAX_NOTIFICATIONS_PER_HOUR} notifications per hour. Try again in ${minutesUntilReset} minutes.`);
+    }
 
     const options = {
         hostname: 'api.omi.me',
@@ -91,10 +114,24 @@ function sendOmiNotification(userId, message) {
             res.on('end', () => {
                 if (res.statusCode >= 200 && res.statusCode < 300) {
                     try {
+                        // Update rate limit tracking
+                        if (!notificationHistory.has(userId)) {
+                            notificationHistory.set(userId, []);
+                        }
+                        notificationHistory.get(userId).push(now);
+                        
                         resolve(data ? JSON.parse(data) : {});
                     } catch (e) {
                         resolve({ raw: data });
                     }
+                } else if (res.statusCode === 429) {
+                    // Rate limit exceeded - update tracking and reject
+                    if (!notificationHistory.has(userId)) {
+                        notificationHistory.set(userId, []);
+                    }
+                    notificationHistory.get(userId).push(now);
+                    
+                    reject(new Error(`Rate limit exceeded. Maximum ${MAX_NOTIFICATIONS_PER_HOUR} notifications per hour.`));
                 } else {
                     reject(new Error(`API Error (${res.statusCode}): ${data}`));
                 }
@@ -103,6 +140,31 @@ function sendOmiNotification(userId, message) {
         req.on('error', reject);
         req.end();
     });
+}
+
+/**
+ * Gets the current rate limit status for a user
+ * @param {string} userId - The Omi user's unique ID
+ * @returns {object} Rate limit information
+ */
+function getRateLimitStatus(userId) {
+    const now = Date.now();
+    const userHistory = notificationHistory.get(userId) || [];
+    const recentNotifications = userHistory.filter(timestamp => 
+        now - timestamp < RATE_LIMIT_WINDOW
+    );
+    
+    const remainingNotifications = MAX_NOTIFICATIONS_PER_HOUR - recentNotifications.length;
+    const timeUntilReset = recentNotifications.length > 0 ? 
+        RATE_LIMIT_WINDOW - (now - recentNotifications[0]) : 0;
+    
+    return {
+        remaining: Math.max(0, remainingNotifications),
+        used: recentNotifications.length,
+        limit: MAX_NOTIFICATIONS_PER_HOUR,
+        timeUntilReset: Math.ceil(timeUntilReset / (60 * 1000)), // minutes
+        isLimited: remainingNotifications <= 0
+    };
 }
 
 /**
@@ -156,7 +218,12 @@ app.get('/health', (req, res) => {
       'what do you do', 'how does this work', 'what are the commands',
       'keywords', 'trigger words', 'how to talk to you'
     ],
-    example_usage: 'Hey Omi, what is the weather like in Sydney, Australia?'
+    example_usage: 'Hey Omi, what is the weather like in Sydney, Australia?',
+    rate_limiting: {
+      max_notifications_per_hour: MAX_NOTIFICATIONS_PER_HOUR,
+      active_users: notificationHistory.size,
+      note: 'Check /rate-limit/:userId for specific user status'
+    }
   });
 });
 
@@ -189,6 +256,20 @@ app.get('/help', (req, res) => {
       ]
     },
     note: 'The AI will only respond when you use the trigger phrases. Regular messages without these phrases will be ignored unless you\'re asking for help.'
+  });
+});
+
+// Rate limit status endpoint
+app.get('/rate-limit/:userId', (req, res) => {
+  const { userId } = req.params;
+  const status = getRateLimitStatus(userId);
+  
+  res.status(200).json({
+    user_id: userId,
+    rate_limit: status,
+    message: status.isLimited ? 
+      `Rate limited. Try again in ${status.timeUntilReset} minutes.` :
+      `${status.remaining} notifications remaining this hour.`
   });
 });
 
@@ -417,9 +498,41 @@ app.post('/omi-webhook', async (req, res) => {
      }
     
          // Send response back to Omi using the new function
-     const omiResponse = await sendOmiNotification(session_id, aiResponse);
+     let omiResponse = null;
+     let rateLimitInfo = null;
      
-     console.log('📤 Successfully sent response to Omi:', omiResponse);
+     try {
+       omiResponse = await sendOmiNotification(session_id, aiResponse);
+       console.log('📤 Successfully sent response to Omi:', omiResponse);
+     } catch (error) {
+       if (error.message.includes('Rate limit exceeded')) {
+         rateLimitInfo = getRateLimitStatus(session_id);
+         console.log('⚠️ Rate limit exceeded for user:', session_id, rateLimitInfo);
+         
+         // Still return the AI response, but note the rate limit
+         res.status(200).json({
+           success: true,
+           message: aiResponse,
+           question: question,
+           ai_response: aiResponse,
+           omi_response: null,
+           rate_limit_warning: {
+             message: `AI response generated but notification not sent due to rate limit.`,
+             rate_limit: rateLimitInfo,
+             retry_after: `${rateLimitInfo.timeUntilReset} minutes`
+           },
+           session_id: session_id
+         });
+         
+         // Clear the session transcript after response
+         sessionTranscripts.delete(session_id);
+         console.log('🧹 Cleared session transcript for:', session_id);
+         return;
+       } else {
+         // Re-throw other errors
+         throw error;
+       }
+     }
      
      // Clear the session transcript after successful processing
      sessionTranscripts.delete(session_id);
@@ -502,24 +615,42 @@ app.listen(PORT, async () => {
   // Create OpenAI assistant with web search
   await createAssistant();
   
-  // Set up session cleanup every 5 minutes
-  setInterval(() => {
-    const now = Date.now();
-    const fiveMinutesAgo = now - (5 * 60 * 1000);
-    
-    for (const [sessionId, segments] of sessionTranscripts.entries()) {
-      // Check if any segment is older than 5 minutes
-      const hasOldSegment = segments.some(segment => {
-        // Use segment.end time if available, otherwise assume recent
-        return segment.end && (segment.end * 1000) < fiveMinutesAgo;
-      });
-      
-      if (hasOldSegment) {
-        sessionTranscripts.delete(sessionId);
-        console.log('🧹 Cleaned up old session:', sessionId);
-      }
-    }
-  }, 5 * 60 * 1000); // 5 minutes
+     // Set up session cleanup every 5 minutes
+   setInterval(() => {
+     const now = Date.now();
+     const fiveMinutesAgo = now - (5 * 60 * 1000);
+     
+     for (const [sessionId, segments] of sessionTranscripts.entries()) {
+       // Check if any segment is older than 5 minutes
+       const hasOldSegment = segments.some(segment => {
+         // Use segment.end time if available, otherwise assume recent
+         return segment.end && (segment.end * 1000) < fiveMinutesAgo;
+       });
+       
+       if (hasOldSegment) {
+         sessionTranscripts.delete(sessionId);
+         console.log('🧹 Cleaned up old session:', sessionId);
+       }
+     }
+   }, 5 * 60 * 1000); // 5 minutes
+   
+   // Set up rate limit cleanup every hour
+   setInterval(() => {
+     const now = Date.now();
+     const oneHourAgo = now - RATE_LIMIT_WINDOW;
+     
+     for (const [userId, timestamps] of notificationHistory.entries()) {
+       // Remove timestamps older than 1 hour
+       const recentTimestamps = timestamps.filter(timestamp => timestamp > oneHourAgo);
+       
+       if (recentTimestamps.length === 0) {
+         notificationHistory.delete(userId);
+         console.log('🧹 Cleaned up old rate limit history for user:', userId);
+       } else {
+         notificationHistory.set(userId, recentTimestamps);
+       }
+     }
+   }, RATE_LIMIT_WINDOW); // 1 hour
   
   console.log('✅ Server ready to receive Omi webhooks');
 });
