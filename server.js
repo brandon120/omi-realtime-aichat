@@ -265,17 +265,18 @@ app.post('/omi-webhook', async (req, res) => {
     console.log('🤖 Processing question:', question);
     
     // Check if we should use web search for real-time info
-    const searchKeywords = ['weather', 'news', 'latest', 'current', 'today', 'recent', 'price', 'stock', 'market', 'sports', 'score', 'live'];
+    const searchKeywords = ['weather', 'news', 'latest', 'current', 'today', 'recent', 'price', 'stock', 'market', 'sports', 'score', 'live', 'search'];
     const shouldSearch = searchKeywords.some(keyword => question.toLowerCase().includes(keyword));
     
     let systemPrompt = 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.';
     let userPrompt = question;
+    let searchResults = null;
     
     // Add web search results if beneficial
     if (shouldSearch) {
         try {
             console.log('🔍 Searching web for:', question);
-            const searchResults = await performWebSearch(question);
+            searchResults = await performWebSearch(question);
             
             if (searchResults.AbstractText || searchResults.RelatedTopics?.length > 0) {
                 let searchContext = '';
@@ -314,7 +315,7 @@ app.post('/omi-webhook', async (req, res) => {
           content: userPrompt
         }
       ],
-      max_tokens: 500,
+      max_tokens: 800,
       temperature: 0.7,
     });
     
@@ -333,6 +334,7 @@ app.post('/omi-webhook', async (req, res) => {
       question: question,
       ai_response: aiResponse,
       omi_response: omiResponse,
+      search_results: searchResults,
       session_id: session_id
     });
     
@@ -383,7 +385,6 @@ app.use('*', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log('🔐 OMI_APP_SECRET being used:', process.env.OMI_APP_SECRET);
   console.log('🚀 Omi AI Chat Plugin server started');
   console.log(`📍 Server running on port ${PORT}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
