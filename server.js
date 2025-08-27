@@ -3,6 +3,21 @@ const https = require('https');
 const OpenAI = require('openai');
 require('dotenv').config();
 
+/**
+ * Omi AI Chat Plugin Server
+ * 
+ * TRIGGER PHRASES: Users must start their message with one of these to activate the AI:
+ * - "Hey Omi" (most common)
+ * - "Hey, Omi" (with comma)
+ * - "Hey Omi," (with trailing comma)
+ * - "Hey, Omi," (with both commas)
+ * 
+ * HELP KEYWORDS: Users can ask for help using these words:
+ * - "help", "what can you do", "how to use", "instructions", "guide"
+ * - "what do you do", "how does this work", "what are the commands"
+ * - "keywords", "trigger words", "how to talk to you"
+ */
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -62,7 +77,54 @@ app.use(express.urlencoded({ extended: true }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', message: 'Omi AI Chat Plugin is running' });
+  res.status(200).json({ 
+    status: 'OK', 
+    message: 'Omi AI Chat Plugin is running',
+    trigger_phrases: [
+      'Hey Omi',
+      'Hey, Omi', 
+      'Hey omi,',
+      'Hey, omi,'
+    ],
+    help_keywords: [
+      'help', 'what can you do', 'how to use', 'instructions', 'guide',
+      'what do you do', 'how does this work', 'what are the commands',
+      'keywords', 'trigger words', 'how to talk to you'
+    ],
+    example_usage: 'Hey Omi, what is the weather like in Sydney, Australia?'
+  });
+});
+
+// Help endpoint
+app.get('/help', (req, res) => {
+  res.status(200).json({
+    title: 'Omi AI Chat Plugin - How to Use',
+    description: 'Learn how to interact with the Omi AI assistant',
+    trigger_phrases: {
+      description: 'Start your message with one of these phrases to activate the AI:',
+      phrases: [
+        'Hey Omi',
+        'Hey, Omi', 
+        'Hey Omi,',
+        'Hey, Omi,'
+      ]
+    },
+    examples: [
+      'Hey Omi, what is the weather like in Sydney, Australia?',
+      'Hey, Omi, can you help me solve a math problem?',
+      'Hey Omi, what are the latest news headlines?',
+      'Hey, Omi, how do I make a chocolate cake?'
+    ],
+    help_keywords: {
+      description: 'You can also ask for help using these words:',
+      keywords: [
+        'help', 'what can you do', 'how to use', 'instructions', 'guide',
+        'what do you do', 'how does this work', 'what are the commands',
+        'keywords', 'trigger words', 'how to talk to you'
+      ]
+    },
+    note: 'The AI will only respond when you use the trigger phrases. Regular messages without these phrases will be ignored unless you\'re asking for help.'
+  });
 });
 
 // Main Omi webhook endpoint
@@ -95,11 +157,35 @@ app.post('/omi-webhook', async (req, res) => {
                       transcriptLower.includes('hey omi,') ||
                       transcriptLower.includes('hey, omi,');
     
+    // Check if user is asking for help or instructions
+    const helpKeywords = [
+      'help', 'what can you do', 'how to use', 'instructions', 'guide',
+      'what do you do', 'how does this work', 'what are the commands',
+      'keywords', 'trigger words', 'how to talk to you'
+    ];
+    
+    const isAskingForHelp = helpKeywords.some(keyword => 
+      transcriptLower.includes(keyword)
+    );
+    
     if (!hasHeyOmi) {
-      console.log('⏭️ Skipping transcript - does not contain "hey omi" or similar:', fullTranscript);
-      return res.status(200).json({ 
-        message: 'Transcript ignored - does not contain "hey omi" or similar' 
-      });
+      if (isAskingForHelp) {
+        // User is asking for help, provide helpful response
+        const helpMessage = `Hi! I'm Omi, your AI assistant. To talk to me, start your message with "Hey Omi" or "Hey, Omi" followed by your question. For example: "Hey Omi, what's the weather like?" or "Hey, Omi, can you help me with math?"`;
+        
+        console.log('💡 User asked for help, providing instructions');
+        return res.status(200).json({ 
+          message: 'Help requested',
+          help_response: helpMessage,
+          instructions: 'Start your message with "Hey Omi" to get help from the AI assistant.'
+        });
+      } else {
+        // User didn't use trigger phrase and isn't asking for help - silently ignore
+        console.log('⏭️ Skipping transcript - does not contain "hey omi" and no help requested:', fullTranscript);
+        return res.status(200).json({ 
+          message: 'Transcript ignored - no action required' 
+        });
+      }
     }
     
     // Find the segment that contains "hey omi" or similar and get everything after it
@@ -235,6 +321,7 @@ app.listen(PORT, () => {
   console.log('🚀 Omi AI Chat Plugin server started');
   console.log(`📍 Server running on port ${PORT}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+  console.log(`📖 Help & instructions: http://localhost:${PORT}/help`);
   console.log(`📡 Webhook endpoint: http://localhost:${PORT}/omi-webhook`);
   
   // Check environment variables (Updated)
