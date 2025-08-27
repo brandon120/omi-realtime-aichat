@@ -1,5 +1,5 @@
 const express = require('express');
-const axios = require('axios');
+const https = require('https');
 const OpenAI = require('openai');
 require('dotenv').config();
 
@@ -10,6 +10,51 @@ const PORT = process.env.PORT || 3000;
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_KEY,
 });
+
+/**
+ * Sends a direct notification to an Omi user.
+ * @param {string} userId - The Omi user's unique ID
+ * @param {string} message - The notification text
+ * @returns {Promise<object>} Response data or error
+ */
+function sendOmiNotification(userId, message) {
+    const appId = process.env.OMI_APP_ID;
+    const appSecret = process.env.OMI_APP_SECRET;
+
+    if (!appId) throw new Error("OMI_APP_ID not set");
+    if (!appSecret) throw new Error("OMI_APP_SECRET not set");
+
+    const options = {
+        hostname: 'api.omi.me',
+        path: `/v2/integrations/${appId}/notification?uid=${encodeURIComponent(userId)}&message=${encodeURIComponent(message)}`,
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${appSecret}`,
+            'Content-Type': 'application/json',
+            'Content-Length': 0
+        }
+    };
+
+    return new Promise((resolve, reject) => {
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    try {
+                        resolve(data ? JSON.parse(data) : {});
+                    } catch (e) {
+                        resolve({ raw: data });
+                    }
+                } else {
+                    reject(new Error(`API Error (${res.statusCode}): ${data}`));
+                }
+            });
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
 
 // Middleware
 app.use(express.json());
@@ -124,20 +169,10 @@ app.post('/omi-webhook', async (req, res) => {
     const aiResponse = openaiResponse.choices[0].message.content;
     console.log('✨ OpenAI response:', aiResponse);
     
-    // Send response back to Omi notification API (Updated)
-    const omiResponse = await axios.post(
-      `https://api.omi.me/v2/integrations/${process.env.OMI_APP_ID}/notification?uid=${encodeURIComponent(session_id)}&message=${encodeURIComponent(aiResponse)}`,
-      {}, // Empty body since we're using query parameters
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OMI_APP_SECRET}`,
-          'Content-Type': 'application/json',
-          'Content-Length': 0
-        }
-      }
-    );
+    // Send response back to Omi using the new function
+    const omiResponse = await sendOmiNotification(session_id, aiResponse);
     
-    console.log('📤 Successfully sent response to Omi:', omiResponse.status);
+    console.log('📤 Successfully sent response to Omi:', omiResponse);
     
     // Return success response
     res.status(200).json({
@@ -145,7 +180,7 @@ app.post('/omi-webhook', async (req, res) => {
       message: 'Question processed and response sent to Omi',
       question: question,
       ai_response: aiResponse,
-      omi_status: omiResponse.status,
+      omi_response: omiResponse,
       session_id: session_id
     });
     
@@ -153,25 +188,19 @@ app.post('/omi-webhook', async (req, res) => {
     console.error('❌ Error processing webhook:', error);
     
     // Handle specific error types
-    if (error.response) {
-      // API error response
-      console.error('API Error Details:', {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data,
-        headers: error.response.headers,
-        url: error.config?.url
-      });
-      res.status(error.response.status).json({
-        error: 'API Error',
-        details: error.response.data
-      });
-    } else if (error.request) {
-      // Network error
-      console.error('Network Error:', error.request);
+    if (error.message && error.message.includes('API Error')) {
+      // Omi API error response
+      console.error('Omi API Error:', error.message);
       res.status(500).json({
-        error: 'Network Error',
-        message: 'Failed to make request to external API'
+        error: 'Omi API Error',
+        message: error.message
+      });
+    } else if (error.message && (error.message.includes('OMI_APP_ID not set') || error.message.includes('OMI_APP_SECRET not set'))) {
+      // Configuration error
+      console.error('Configuration Error:', error.message);
+      res.status(500).json({
+        error: 'Configuration Error',
+        message: error.message
       });
     } else {
       // Other errors
