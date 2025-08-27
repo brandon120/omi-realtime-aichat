@@ -71,6 +71,37 @@ function sendOmiNotification(userId, message) {
     });
 }
 
+/**
+ * Performs a web search using DuckDuckGo (free, no API key required)
+ * @param {string} query - The search query
+ * @returns {Promise<object>} Search results
+ */
+async function performWebSearch(query) {
+    try {
+        const searchUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        
+        return new Promise((resolve, reject) => {
+            const req = https.get(searchUrl, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const results = JSON.parse(data);
+                        resolve(results);
+                    } catch (e) {
+                        reject(new Error('Failed to parse search results'));
+                    }
+                });
+            });
+            req.on('error', reject);
+            req.setTimeout(10000, () => reject(new Error('Search timeout')));
+        });
+    } catch (error) {
+        console.error('❌ Web search error:', error);
+        return { error: 'Search failed', message: error.message };
+    }
+}
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -233,17 +264,54 @@ app.post('/omi-webhook', async (req, res) => {
     
     console.log('🤖 Processing question:', question);
     
+    // Check if we should use web search for real-time info
+    const searchKeywords = ['weather', 'news', 'latest', 'current', 'today', 'recent', 'price', 'stock', 'market', 'sports', 'score', 'live'];
+    const shouldSearch = searchKeywords.some(keyword => question.toLowerCase().includes(keyword));
+    
+    let systemPrompt = 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.';
+    let userPrompt = question;
+    
+    // Add web search results if beneficial
+    if (shouldSearch) {
+        try {
+            console.log('🔍 Searching web for:', question);
+            const searchResults = await performWebSearch(question);
+            
+            if (searchResults.AbstractText || searchResults.RelatedTopics?.length > 0) {
+                let searchContext = '';
+                if (searchResults.AbstractText) {
+                    searchContext += `\n\nSearch Results: ${searchResults.AbstractText}`;
+                }
+                if (searchResults.RelatedTopics?.length > 0) {
+                    const topResults = searchResults.RelatedTopics.slice(0, 2);
+                    searchContext += '\n\nAdditional Info:';
+                    topResults.forEach((topic, index) => {
+                        if (topic.Text) {
+                            searchContext += `\n${index + 1}. ${topic.Text}`;
+                        }
+                    });
+                }
+                
+                systemPrompt += '\n\nUse the search results to provide accurate, up-to-date information.';
+                userPrompt = `Question: ${question}\n\nSearch Context:${searchContext}\n\nPlease answer using the search results above.`;
+                console.log('✨ Web search completed');
+            }
+        } catch (error) {
+            console.log('⚠️ Search failed, using standard response');
+        }
+    }
+    
     // Send question to OpenAI GPT-4
     const openaiResponse = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
         {
           role: 'system',
-          content: 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.'
+          content: systemPrompt
         },
         {
           role: 'user',
-          content: question
+          content: userPrompt
         }
       ],
       max_tokens: 500,
@@ -261,7 +329,7 @@ app.post('/omi-webhook', async (req, res) => {
     // Return success response
     res.status(200).json({
       success: true,
-      message: 'Question processed and response sent to Omi',
+      message: aiResponse,
       question: question,
       ai_response: aiResponse,
       omi_response: omiResponse,
