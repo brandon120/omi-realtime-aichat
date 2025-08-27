@@ -26,6 +26,22 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_KEY,
 });
 
+// Create an assistant with web search capability
+let assistant = null;
+async function createAssistant() {
+  try {
+    assistant = await openai.beta.assistants.create({
+      name: "Omi AI Assistant",
+      instructions: "You are a helpful AI assistant. Use web search when needed to provide accurate, up-to-date information.",
+      model: "gpt-4o",
+      tools: [{ type: "web_search" }],
+    });
+    console.log('✅ Created OpenAI assistant with web search:', assistant.id);
+  } catch (error) {
+    console.error('❌ Failed to create assistant:', error);
+  }
+}
+
 /**
  * Sends a direct notification to an Omi user.
  * @param {string} userId - The Omi user's unique ID
@@ -264,63 +280,59 @@ app.post('/omi-webhook', async (req, res) => {
     
     console.log('🤖 Processing question:', question);
     
-    // Check if we should use web search for real-time info
-    const searchKeywords = ['weather', 'news', 'latest', 'current', 'today', 'recent', 'price', 'stock', 'market', 'sports', 'score', 'live', 'search'];
-    const shouldSearch = searchKeywords.some(keyword => question.toLowerCase().includes(keyword));
+    // Use OpenAI Assistants API with built-in web search
+    console.log('🤖 Using OpenAI Assistant with web search for:', question);
     
-    let systemPrompt = 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.';
-    let userPrompt = question;
-    let searchResults = null;
+    let aiResponse = '';
     
-    // Add web search results if beneficial
-    if (shouldSearch) {
-        try {
-            console.log('🔍 Searching web for:', question);
-            searchResults = await performWebSearch(question);
-            
-            if (searchResults.AbstractText || searchResults.RelatedTopics?.length > 0) {
-                let searchContext = '';
-                if (searchResults.AbstractText) {
-                    searchContext += `\n\nSearch Results: ${searchResults.AbstractText}`;
-                }
-                if (searchResults.RelatedTopics?.length > 0) {
-                    const topResults = searchResults.RelatedTopics.slice(0, 2);
-                    searchContext += '\n\nAdditional Info:';
-                    topResults.forEach((topic, index) => {
-                        if (topic.Text) {
-                            searchContext += `\n${index + 1}. ${topic.Text}`;
-                        }
-                    });
-                }
-                
-                systemPrompt += '\n\nUse the search results to provide accurate, up-to-date information.';
-                userPrompt = `Question: ${question}\n\nSearch Context:${searchContext}\n\nPlease answer using the search results above.`;
-                console.log('✨ Web search completed');
-            }
-        } catch (error) {
-            console.log('⚠️ Search failed, using standard response');
+    try {
+        // Create a thread
+        const thread = await openai.beta.threads.create();
+        
+        // Add the user's question to the thread
+        await openai.beta.threads.messages.create(thread.id, {
+            role: "user",
+            content: question,
+        });
+        
+        // Run the assistant
+        const run = await openai.beta.threads.runs.create(thread.id, {
+            assistant_id: assistant.id,
+        });
+        
+        // Wait for the run to complete
+        let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+        while (runStatus.status === "in_progress" || runStatus.status === "queued") {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
         }
+        
+        // Get the response
+        const messages = await openai.beta.threads.messages.list(thread.id);
+        aiResponse = messages.data[0].content[0].text.value;
+        
+        console.log('✨ OpenAI Assistant response:', aiResponse);
+        
+        // Check if web search was used
+        if (runStatus.required_action?.type === 'submit_tool_outputs') {
+            console.log('🔍 Web search was used by the assistant');
+        }
+        
+    } catch (error) {
+        console.error('❌ OpenAI Assistant error:', error);
+        // Fallback to regular chat completion
+        const openaiResponse = await openai.chat.completions.create({
+            model: 'gpt-4',
+            messages: [
+                { role: 'system', content: 'You are a helpful AI assistant. Provide clear, concise, and helpful responses.' },
+                { role: 'user', content: question }
+            ],
+            max_tokens: 800,
+            temperature: 0.7,
+        });
+        aiResponse = openaiResponse.choices[0].message.content;
+        console.log('✨ Fallback OpenAI response:', aiResponse);
     }
-    
-    // Send question to OpenAI GPT-4
-    const openaiResponse = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt
-        },
-        {
-          role: 'user',
-          content: userPrompt
-        }
-      ],
-      max_tokens: 800,
-      temperature: 0.7,
-    });
-    
-    const aiResponse = openaiResponse.choices[0].message.content;
-    console.log('✨ OpenAI response:', aiResponse);
     
     // Send response back to Omi using the new function
     const omiResponse = await sendOmiNotification(session_id, aiResponse);
@@ -334,7 +346,6 @@ app.post('/omi-webhook', async (req, res) => {
       question: question,
       ai_response: aiResponse,
       omi_response: omiResponse,
-      search_results: searchResults,
       session_id: session_id
     });
     
@@ -384,7 +395,7 @@ app.use('*', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log('🚀 Omi AI Chat Plugin server started');
   console.log(`📍 Server running on port ${PORT}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
@@ -401,6 +412,9 @@ app.listen(PORT, () => {
   if (!process.env.OMI_APP_SECRET) {
     console.warn('⚠️  OMI_APP_SECRET environment variable is not set');
   }
+  
+  // Create OpenAI assistant with web search
+  await createAssistant();
   
   console.log('✅ Server ready to receive Omi webhooks');
 });
