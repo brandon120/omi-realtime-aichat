@@ -160,7 +160,6 @@ app.get('/health', (req, res) => {
       'Hey omi,',
       'Hey, omi,'
       'I wonder',
-      'I'm curious.",
     ],
     help_keywords: [
       'help', 'what can you do', 'how to use', 'instructions', 'guide',
