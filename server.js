@@ -155,11 +155,11 @@ app.get('/health', (req, res) => {
     status: 'OK', 
     message: 'Omi AI Chat Plugin is running',
     trigger_phrases: [
-      'Hey Omi',
+      'Hey Omi.',
       'Hey, Omi', 
       'Hey omi,',
-      'Hey, omi,'
-      'I wonder',
+      'Hey, omi,',
+      'Hey, omi.',
     ],
     help_keywords: [
       'help', 'what can you do', 'how to use', 'instructions', 'guide',
@@ -271,7 +271,7 @@ app.post('/omi-webhook', async (req, res) => {
     const hasHeyOmi = transcriptLower.includes('hey omi') || 
                       transcriptLower.includes('hey, omi') ||
                       transcriptLower.includes('hey omi,') ||
-                      transcriptLower.includes('hey, omi,');
+                      transcriptLower.includes('hey, omi.');
     
     // Secondary triggers: Natural language patterns
     const isQuestion = /\b(who|what|where|when|why|how|can you|could you|would you|tell me|show me|find|search|look up)\b/i.test(fullTranscript);
