@@ -24,6 +24,9 @@ const PORT = process.env.PORT || 3000;
 // Session storage to accumulate transcript segments
 const sessionTranscripts = new Map();
 
+// Conversation history storage to maintain context between interactions
+const conversationHistory = new Map();
+
 // Rate limiting for Omi notifications (max 10 per hour)
 const notificationQueue = [];
 const notificationHistory = new Map(); // Track notifications per user
@@ -143,6 +146,62 @@ function getRateLimitStatus(userId) {
     };
 }
 
+/**
+ * Manages conversation history for a session with token limit handling
+ * @param {string} sessionId - The session ID
+ * @param {string} userMessage - The user's message
+ * @param {string} aiResponse - The AI's response
+ * @returns {Array} The conversation history array
+ */
+function manageConversationHistory(sessionId, userMessage, aiResponse) {
+    // Get existing conversation history or create new one
+    let history = conversationHistory.get(sessionId) || [];
+    
+    // Add the new exchange to history
+    history.push(
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: aiResponse }
+    );
+    
+    // Estimate tokens (rough approximation: 1 token ≈ 4 characters)
+    const estimatedTokens = history.reduce((total, msg) => total + Math.ceil(msg.content.length / 4), 0);
+    
+    // If we're approaching token limits, keep only recent messages
+    // GPT-4o has ~128k context, but we'll be conservative and limit to ~50k tokens
+    const MAX_TOKENS = 50000;
+    if (estimatedTokens > MAX_TOKENS) {
+        // Keep the system message and the most recent exchanges
+        const systemMessage = history.find(msg => msg.role === 'system');
+        const recentMessages = history.filter(msg => msg.role !== 'system').slice(-20); // Keep last 10 exchanges
+        
+        history = systemMessage ? [systemMessage, ...recentMessages] : recentMessages;
+        console.log(`🧹 Trimmed conversation history for session ${sessionId} due to token limit`);
+    }
+    
+    // Store updated history
+    conversationHistory.set(sessionId, history);
+    
+    return history;
+}
+
+/**
+ * Gets conversation history for a session
+ * @param {string} sessionId - The session ID
+ * @returns {Array} The conversation history array
+ */
+function getConversationHistory(sessionId) {
+    return conversationHistory.get(sessionId) || [];
+}
+
+/**
+ * Clears conversation history for a session
+ * @param {string} sessionId - The session ID
+ */
+function clearConversationHistory(sessionId) {
+    conversationHistory.delete(sessionId);
+    console.log(`🧹 Cleared conversation history for session: ${sessionId}`);
+}
+
 // Web search is now handled automatically by OpenAI's web_search_preview tool
 
 // Middleware
@@ -158,7 +217,11 @@ app.get('/health', (req, res) => {
       'Hey Omi',
       'Hey, Omi', 
       'Hey omi,',
-      'Hey, omi,'
+      'Hey, omi,',
+      'Hey Omi.',
+      'Hey, Omi.',
+      'Hey omi.',
+      'Hey, omi.'
     ],
     help_keywords: [
       'help', 'what can you do', 'how to use', 'instructions', 'guide',
@@ -175,6 +238,12 @@ app.get('/health', (req, res) => {
       type: 'OpenAI Responses API',
       model: OPENAI_MODEL,
       web_search: 'web_search_preview tool enabled'
+    },
+    conversation_state: {
+      active_sessions: sessionTranscripts.size,
+      active_conversations: conversationHistory.size,
+      context_management: 'enabled',
+      token_limit_handling: 'automatic'
     }
   });
 });
@@ -227,6 +296,30 @@ app.get('/rate-limit/:userId', (req, res) => {
     message: status.isLimited ? 
       `Rate limited. Try again in ${status.timeUntilReset} minutes.` :
       `${status.remaining} notifications remaining this hour.`
+  });
+});
+
+// Conversation history endpoint (for debugging)
+app.get('/conversation/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const history = getConversationHistory(sessionId);
+  
+  res.status(200).json({
+    session_id: sessionId,
+    conversation_history: history,
+    message_count: history.length,
+    has_context: history.length > 0
+  });
+});
+
+// Clear conversation history endpoint (for debugging)
+app.delete('/conversation/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  clearConversationHistory(sessionId);
+  
+  res.status(200).json({
+    session_id: sessionId,
+    message: 'Conversation history cleared'
   });
 });
 
@@ -297,13 +390,18 @@ app.post('/omi-webhook', async (req, res) => {
         const helpMessage = `Hi! I'm Omi, your AI assistant. You can talk to me naturally! Try asking questions like "What's the weather like?" or "Can you search for current news?" I'll automatically detect when you need my help.`;
         
         console.log('💡 User asked for help, providing instructions');
+        
+        // Store help interaction in conversation history
+        manageConversationHistory(session_id, fullTranscript, helpMessage);
+        
         // Clear the session transcript after help response
         sessionTranscripts.delete(session_id);
         console.log('🧹 Cleared session transcript for help request:', session_id);
         return res.status(200).json({ 
           message: 'You can talk to me naturally! Try asking questions or giving commands.',
           help_response: helpMessage,
-          instructions: 'Ask questions naturally or use "Hey Omi" to be explicit.'
+          instructions: 'Ask questions naturally or use "Hey Omi" to be explicit.',
+          conversation_context: 'maintained'
         });
       } else {
         // User didn't trigger AI interaction - silently ignore
@@ -361,11 +459,26 @@ app.post('/omi-webhook', async (req, res) => {
      let aiResponse = '';
      
      try {
-         // Use the new Responses API with web search
+         // Get conversation history for this session
+         const history = getConversationHistory(session_id);
+         
+         // Create context-aware input for the Responses API
+         let contextInput = question;
+         if (history.length > 0) {
+             // Build conversation context from history
+             const contextMessages = history.map(msg => 
+                 `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+             ).join('\n\n');
+             
+             contextInput = `Previous conversation:\n${contextMessages}\n\nCurrent user message: ${question}`;
+             console.log('📚 Including conversation history in context');
+         }
+         
+         // Use the new Responses API with web search and conversation context
          const response = await openai.responses.create({
              model: OPENAI_MODEL,
              tools: [WEB_SEARCH_TOOL],
-             input: question,
+             input: contextInput,
          });
          
          aiResponse = response.output_text;
@@ -381,15 +494,29 @@ app.post('/omi-webhook', async (req, res) => {
          
          // Fallback to regular chat completion if Responses API fails
          try {
+             // Get conversation history for fallback
+             const history = getConversationHistory(session_id);
+             
+             // Build messages array with conversation history
+             const messages = [
+                 { 
+                     role: 'system', 
+                     content: 'You are a helpful AI assistant. When users ask about current events, weather, news, or time-sensitive information, be honest about your knowledge cutoff and suggest they check reliable sources for the most up-to-date information. For general knowledge questions, provide helpful and accurate responses.' 
+                 }
+             ];
+             
+             // Add conversation history
+             if (history.length > 0) {
+                 messages.push(...history);
+                 console.log('📚 Including conversation history in fallback');
+             }
+             
+             // Add current user message
+             messages.push({ role: 'user', content: question });
+             
              const openaiResponse = await openai.chat.completions.create({
                  model: 'gpt-4o',
-                 messages: [
-                     { 
-                         role: 'system', 
-                         content: 'You are a helpful AI assistant. When users ask about current events, weather, news, or time-sensitive information, be honest about your knowledge cutoff and suggest they check reliable sources for the most up-to-date information. For general knowledge questions, provide helpful and accurate responses.' 
-                     },
-                     { role: 'user', content: question }
-                 ],
+                 messages: messages,
                  max_tokens: 800,
                  temperature: 0.7,
              });
@@ -413,6 +540,9 @@ app.post('/omi-webhook', async (req, res) => {
          rateLimitInfo = getRateLimitStatus(session_id);
          console.log('⚠️ Rate limit exceeded for user:', session_id, rateLimitInfo);
          
+         // Store conversation history even when rate limited
+         manageConversationHistory(session_id, question, aiResponse);
+         
          // Still return the AI response, but note the rate limit
          res.status(200).json({
            success: true,
@@ -425,7 +555,8 @@ app.post('/omi-webhook', async (req, res) => {
              rate_limit: rateLimitInfo,
              retry_after: `${rateLimitInfo.timeUntilReset} minutes`
            },
-           session_id: session_id
+           session_id: session_id,
+           conversation_context: 'maintained'
          });
          
          // Clear the session transcript after response
@@ -438,6 +569,9 @@ app.post('/omi-webhook', async (req, res) => {
        }
      }
      
+     // Store conversation history for future context
+     manageConversationHistory(session_id, question, aiResponse);
+     
      // Clear the session transcript after successful processing
      sessionTranscripts.delete(session_id);
      console.log('🧹 Cleared session transcript for:', session_id);
@@ -449,7 +583,8 @@ app.post('/omi-webhook', async (req, res) => {
        question: question,
        ai_response: aiResponse,
        omi_response: omiResponse,
-       session_id: session_id
+       session_id: session_id,
+       conversation_context: 'maintained'
      });
     
   } catch (error) {
@@ -534,6 +669,20 @@ app.listen(PORT, async () => {
        if (hasOldSegment) {
          sessionTranscripts.delete(sessionId);
          console.log('🧹 Cleaned up old session:', sessionId);
+       }
+     }
+     
+     // Clean up conversation history for sessions that haven't been active for 30 minutes
+     const thirtyMinutesAgo = now - (30 * 60 * 1000);
+     for (const [sessionId, history] of conversationHistory.entries()) {
+       // If no recent activity, clean up conversation history
+       // This is a simple cleanup - in production you might want more sophisticated tracking
+       if (history.length > 0) {
+         const lastMessage = history[history.length - 1];
+         // Simple heuristic: if we have more than 50 messages, it's probably old
+         if (history.length > 50) {
+           clearConversationHistory(sessionId);
+         }
        }
      }
    }, 5 * 60 * 1000); // 5 minutes
