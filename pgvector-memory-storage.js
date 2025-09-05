@@ -30,14 +30,64 @@ class PgVectorMemoryStorage {
     }
 
     /**
+     * Get SSL configuration based on environment and database URL
+     */
+    getSSLConfig() {
+        const databaseUrl = process.env.DATABASE_URL;
+        
+        // If no DATABASE_URL, disable SSL
+        if (!databaseUrl) {
+            return false;
+        }
+        
+        // Check if DATABASE_URL contains SSL parameters
+        if (databaseUrl.includes('sslmode=')) {
+            // Let the connection string handle SSL configuration
+            return undefined;
+        }
+        
+        // For cloud providers (Railway, Heroku, etc.), enable SSL
+        if (databaseUrl.includes('railway.app') || 
+            databaseUrl.includes('herokuapp.com') || 
+            databaseUrl.includes('amazonaws.com') ||
+            databaseUrl.includes('supabase.co') ||
+            databaseUrl.includes('planetscale.com')) {
+            return { rejectUnauthorized: false };
+        }
+        
+        // For localhost connections in development/test, disable SSL
+        if ((databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1')) && 
+            (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test')) {
+            return false;
+        }
+        
+        // For localhost connections in production, enable SSL
+        if ((databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1')) && 
+            process.env.NODE_ENV === 'production') {
+            return { rejectUnauthorized: false };
+        }
+        
+        // For localhost connections without NODE_ENV set, disable SSL
+        if (databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1')) {
+            return false;
+        }
+        
+        // For production or other environments, enable SSL
+        return { rejectUnauthorized: false };
+    }
+
+    /**
      * Initialize the PostgreSQL connection and create necessary tables
      */
     async initialize() {
         try {
+            const sslConfig = this.getSSLConfig();
+            console.log('🔧 SSL Configuration:', sslConfig === undefined ? 'auto' : sslConfig);
+            
             // Create connection pool
             this.pool = new Pool({
                 connectionString: process.env.DATABASE_URL,
-                ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+                ssl: sslConfig,
                 max: 20,
                 idleTimeoutMillis: 30000,
                 connectionTimeoutMillis: 2000,
