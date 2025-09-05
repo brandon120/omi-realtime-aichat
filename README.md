@@ -165,7 +165,25 @@ Your webhook URL will be: `https://your-app-name.railway.app/omi-webhook`
   - Read transcripts
   - Send notifications
 
-### 3. Webhook Payload Format
+### 3. Memory Search Commands
+
+Users can search their saved memories using these voice commands:
+
+**Memory Search Commands:**
+- "search memory [query]" - Find information in your saved memories
+- "what do you remember about [topic]" - Query your memory database
+- "find in memory [keywords]" - Search for specific information
+- "show me memories about [topic]" - Display saved memories
+- "recall [information]" - Search for specific details
+- "search for [query]" - General memory search
+
+**Example Usage:**
+- "search memory programming languages"
+- "what do you remember about meetings"
+- "find in memory JavaScript"
+- "show me memories about my dog"
+
+### 4. Webhook Payload Format
 
 The plugin expects webhook payloads in this format:
 
@@ -226,6 +244,12 @@ Shows rate limit status for a specific user.
 POST /omi-webhook
 ```
 Processes incoming Omi transcript data and generates AI responses.
+
+### Memory Search Test
+```
+POST /memories/search/test
+```
+Test memory search functionality with formatted results.
 
 ## 🔧 Configuration Options
 
@@ -298,6 +322,7 @@ node test-rate-limit.js
 - **Railway Auto-scaling**: Automatically scales based on traffic
 - **Response Time**: Typically 2-5 seconds for full request cycle
 - **Memory Management**: Automatic session and rate limit cleanup
+- **Memory Search**: Query your saved memories with natural language search
 - **Web Search**: Built-in for current information without external APIs
 
 ## Troubleshooting
