@@ -1007,6 +1007,7 @@ app.get('/health', (req, res) => {
       vector_store: isPgVectorReady() ? 'PgVector' : 'local_fallback',
       memory_features: [
         'save to memory',
+        'search memory',
         'save notes',
         'save as todos',
         'clear context'
@@ -1083,6 +1084,12 @@ app.get('/help', (req, res) => {
       memory: [
         'save to memory', 'remember this', 'store information', 'save information',
         'save as memory', 'memorize this', 'keep this', 'save this'
+      ],
+      memory_search: [
+        'search memory', 'find in memory', 'what do you remember', 'search my memories',
+        'look in memory', 'check memory', 'search memories', 'find memories',
+        'what did i save', 'show me memories', 'recall', 'remember when',
+        'search for', 'find information', 'look up', 'what about'
       ],
       notes: [
         'save notes', 'create summary', 'save this conversation', 'summarize',
@@ -1422,6 +1429,51 @@ app.get('/memories/:userId/export', async (req, res) => {
   }
 });
 
+// Test memory search endpoint
+app.post('/memories/search/test', async (req, res) => {
+  try {
+    const { userId, query, limit = 5 } = req.body;
+    
+    if (!userId || !query) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        message: 'userId and query are required'
+      });
+    }
+    
+    const memories = await searchMemories(userId, query, limit);
+    
+    // Format results for display
+    const formattedResults = memories.map((memory, index) => {
+      const similarity = memory.similarity ? ` (${(memory.similarity * 100).toFixed(1)}% match)` : '';
+      const category = memory.category ? ` [${memory.category}]` : '';
+      const timestamp = memory.timestamp ? new Date(memory.timestamp).toLocaleDateString() : '';
+      return {
+        rank: index + 1,
+        content: memory.content,
+        category: memory.category,
+        similarity: memory.similarity,
+        timestamp: memory.timestamp,
+        formatted: `${index + 1}. ${memory.content}${category}${similarity}${timestamp ? ` - ${timestamp}` : ''}`
+      };
+    });
+    
+    res.status(200).json({
+      user_id: userId,
+      query: query,
+      results: formattedResults,
+      count: memories.length,
+      search_type: isPgVectorReady() ? 'vector_semantic' : 'local_keyword'
+    });
+  } catch (error) {
+    console.error('❌ Error in test memory search:', error);
+    res.status(500).json({
+      error: 'Failed to search memories',
+      message: error.message
+    });
+  }
+});
+
 // Memory statistics for a user
 app.get('/memories/:userId/stats', async (req, res) => {
   try {
@@ -1538,6 +1590,14 @@ app.post('/omi-webhook', async (req, res) => {
       'save as memory', 'memorize this', 'keep this', 'save this'
     ];
     
+    // Memory search keywords
+    const memorySearchKeywords = [
+      'search memory', 'find in memory', 'what do you remember', 'search my memories',
+      'look in memory', 'check memory', 'search memories', 'find memories',
+      'what did i save', 'show me memories', 'recall', 'remember when',
+      'search for', 'find information', 'look up', 'what about'
+    ];
+    
     // Notes and summary keywords
     const notesKeywords = [
       'save notes', 'create summary', 'save this conversation', 'summarize',
@@ -1577,6 +1637,10 @@ app.post('/omi-webhook', async (req, res) => {
       transcriptLower.includes(keyword)
     );
     
+    const isMemorySearchCommand = memorySearchKeywords.some(keyword => 
+      transcriptLower.includes(keyword)
+    );
+    
     const isNotesCommand = notesKeywords.some(keyword => 
       transcriptLower.includes(keyword)
     );
@@ -1598,10 +1662,11 @@ app.post('/omi-webhook', async (req, res) => {
     );
     
     // Debug logging for command detection
-    if (isTodoCommand || isMemoryCommand || isNotesCommand || isContextCommand) {
+    if (isTodoCommand || isMemoryCommand || isNotesCommand || isContextCommand || isMemorySearchCommand) {
       console.log('🔍 Command detected:', {
         transcript: fullTranscript.substring(0, 100) + '...',
         isMemoryCommand,
+        isMemorySearchCommand,
         isNotesCommand,
         isTodoCommand,
         isContextCommand
@@ -1610,7 +1675,7 @@ app.post('/omi-webhook', async (req, res) => {
     
     // Check for duplicate content to prevent processing the same transcript multiple times
     // But allow commands to be processed even if repeated
-    const isAnyCommand = isMemoryCommand || isNotesCommand || isTodoCommand || isContextCommand || isAskingForHelp;
+    const isAnyCommand = isMemoryCommand || isMemorySearchCommand || isNotesCommand || isTodoCommand || isContextCommand || isAskingForHelp;
     
     if (!isAnyCommand) {
       const contentHash = Buffer.from(fullTranscript).toString('base64');
@@ -1638,6 +1703,12 @@ app.post('/omi-webhook', async (req, res) => {
 - "save to memory" - Store important information with smart categorization
 - "remember this" - Quick memory storage
 - "store information" - Save facts and details
+
+**🔍 Memory Search:**
+- "search memory" - Find information in your saved memories
+- "what do you remember" - Query your memory database
+- "find in memory" - Search for specific information
+- "show me memories" - Display saved memories
 
 **📝 Notes & Summaries:**
 - "save notes" - Create structured conversation summaries
@@ -1767,6 +1838,78 @@ I can remember things for you, organize your thoughts, and help you stay product
         console.error('❌ Error saving to memory:', error);
         return res.status(200).json({
           message: 'Sorry, I had trouble saving that to memory. Please try again.',
+          error: error.message
+        });
+      }
+    }
+    
+    // Handle memory search commands
+    if (isMemorySearchCommand) {
+      console.log('🔍 User wants to search memory');
+      
+      try {
+        // Extract the search query (everything after the search command)
+        let searchQuery = fullTranscript;
+        
+        // Handle different search command patterns
+        if (transcriptLower.includes('what do you remember about')) {
+          searchQuery = fullTranscript.replace(/what do you remember about/gi, '').trim();
+        } else if (transcriptLower.includes('show me memories about')) {
+          searchQuery = fullTranscript.replace(/show me memories about/gi, '').trim();
+        } else if (transcriptLower.includes('search for')) {
+          searchQuery = fullTranscript.replace(/search for/gi, '').trim();
+        } else if (transcriptLower.includes('find information about')) {
+          searchQuery = fullTranscript.replace(/find information about/gi, '').trim();
+        } else {
+          // Generic search command removal
+          searchQuery = fullTranscript.replace(/\b(search memory|find in memory|search my memories|look in memory|check memory|search memories|find memories|what did i save|show me memories|recall|remember when|find information|look up|what about)\b/gi, '').trim();
+        }
+        
+        if (!searchQuery) {
+          return res.status(200).json({
+            message: 'What would you like me to search for in your memories? Please provide a search term.',
+            error: 'No search query provided'
+          });
+        }
+        
+        // Search memories
+        const searchResults = await searchMemories(session_id, searchQuery, 5);
+        
+        if (searchResults.length === 0) {
+          return res.status(200).json({
+            message: `I couldn't find any memories matching "${searchQuery}". Try searching with different keywords or check if you have any memories saved.`,
+            search_query: searchQuery,
+            results_count: 0,
+            action: 'memory_search_no_results'
+          });
+        }
+        
+        // Format search results for display
+        const formattedResults = searchResults.map((memory, index) => {
+          const similarity = memory.similarity ? ` (${(memory.similarity * 100).toFixed(1)}% match)` : '';
+          const category = memory.category ? ` [${memory.category}]` : '';
+          const timestamp = memory.timestamp ? new Date(memory.timestamp).toLocaleDateString() : '';
+          return `${index + 1}. ${memory.content}${category}${similarity}${timestamp ? ` - ${timestamp}` : ''}`;
+        }).join('\n\n');
+        
+        // Store search interaction in conversation history
+        manageConversationHistory(session_id, fullTranscript, `Searched memories for: "${searchQuery}"`);
+        
+        // Clear session transcript
+        sessionTranscripts.delete(session_id);
+        
+        return res.status(200).json({
+          message: `🔍 Found ${searchResults.length} memories matching "${searchQuery}":\n\n${formattedResults}`,
+          search_query: searchQuery,
+          results: searchResults,
+          results_count: searchResults.length,
+          action: 'memory_search_completed'
+        });
+        
+      } catch (error) {
+        console.error('❌ Error searching memory:', error);
+        return res.status(200).json({
+          message: 'Sorry, I had trouble searching your memories. Please try again.',
           error: error.message
         });
       }
