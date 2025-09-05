@@ -1004,7 +1004,7 @@ app.get('/health', (req, res) => {
       token_limit_handling: 'automatic'
     },
     memory_system: {
-      vector_store: isChromaDBReady() ? 'ChromaDB' : 'disabled',
+      vector_store: isPgVectorReady() ? 'PgVector' : 'local_fallback',
       memory_features: [
         'save to memory',
         'save notes',
@@ -1012,21 +1012,20 @@ app.get('/health', (req, res) => {
         'clear context'
       ],
       total_memories: memoryStorage.size,
-      status: isChromaDBReady() ? 'active' : 'disabled',
-      initialization_status: isChromaDBInitialized ? 'completed' : 'pending'
+      status: isPgVectorReady() ? 'active' : 'disabled',
+      initialization_status: isPgVectorInitialized ? 'completed' : 'pending'
     }
   });
 });
 
-// ChromaDB status endpoint
-app.get('/chromadb-status', (req, res) => {
+// PgVector status endpoint
+app.get('/pgvector-status', (req, res) => {
   const status = {
-    initialized: isChromaDBInitialized,
-    ready: isChromaDBReady(),
-    client_available: !!chromaClient,
-    collection_available: !!memoriesCollection,
-    url: process.env.CHROMA_URL || 'http://localhost:8000',
-    auth_enabled: !!process.env.CHROMA_AUTH_TOKEN,
+    initialized: isPgVectorInitialized,
+    ready: isPgVectorReady(),
+    storage_available: !!pgVectorStorage,
+    database_url: process.env.DATABASE_URL ? 'SET' : 'NOT_SET',
+    openai_key: process.env.OPENAI_KEY ? 'SET' : 'NOT_SET',
     timestamp: new Date().toISOString()
   };
   
@@ -1428,12 +1427,12 @@ app.get('/memories/:userId/stats', async (req, res) => {
   try {
     const { userId } = req.params;
     
-    // Try to get memories from ChromaDB first, fallback to local storage
+    // Try to get memories from PgVector first, fallback to local storage
     let result;
     try {
       result = await getAllMemories(userId, { limit: 1000 });
-    } catch (chromaError) {
-      console.warn('⚠️ ChromaDB not available, using local memory fallback:', chromaError.message);
+    } catch (pgVectorError) {
+      console.warn('⚠️ PgVector not available, using local memory fallback:', pgVectorError.message);
       result = await getLocalMemories(userId, { limit: 1000 });
     }
     
